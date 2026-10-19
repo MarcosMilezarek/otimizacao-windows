@@ -145,3 +145,92 @@ function Save-PerfilGerado {
 }
 
 #endregion
+
+#region Listas da máquina (I1, I4, I9, I10, A2)
+
+# As funções de leitura e filtro vêm dos próprios scripts, para a lista mostrar só o que o script aceita na aplicação.
+# Cada script é carregado num módulo dinâmico (as funções auxiliares dele não vazam e Get-Opcao, presente nos dois, não colide).
+foreach ($c in @(
+        @{ Nome = 'Otimizacao.Leitura.Inicializacao'; Arquivo = 'Inicializacao.ps1'; Funcoes = 'Get-FonteInicializacao', 'Test-ComponenteWindows', 'Get-InicioServico', 'Get-ExecutavelComando' }
+        @{ Nome = 'Otimizacao.Leitura.Aplicativos'; Arquivo = 'Aplicativos.ps1'; Funcoes = 'Get-ProgramaMaquina', 'Get-MotivoProibido' }
+    )) {
+    New-Module -Name $c.Nome -ArgumentList (Join-Path $PSScriptRoot $c.Arquivo), $c.Funcoes -ScriptBlock {
+        param($Arquivo, $Funcoes)
+        . $Arquivo -Perfil 'nao-usado.psd1'
+        Export-ModuleMember -Function $Funcoes
+    } | Import-Module -Force
+}
+# Os scripts reimportam o módulo comum com -Force, o que o retira desta sessão: importar de novo, sem -Force.
+Import-Module (Join-Path $PSScriptRoot 'Otimizacao.Comum.psm1')
+
+function Get-CandidatoI1 {
+    <# Entradas de inicialização da máquina e do usuário alvo que o I1 aceita (sem componentes do Windows). #>
+    param([Parameter(Mandatory)]$Alvo)
+    $entradas = @(Get-FonteInicializacao -Raiz 'Registry::HKEY_LOCAL_MACHINE' -Escopo Maquina)
+    $entradas += @(Invoke-NoHiveUsuario -Sid $Alvo.Sid -Perfil $Alvo.Perfil -ScriptBlock {
+            param($raiz)
+            Get-FonteInicializacao -Raiz $raiz -Escopo Usuario -PerfilUsuario $Alvo.Perfil
+        })
+    $entradas | Where-Object { -not (Test-ComponenteWindows $_.Comando) } | Sort-Object -Property Nome -Unique |
+        ForEach-Object { [pscustomobject]@{ Nome = $_.Nome; Origem = $_.Origem; Comando = $_.Comando } }
+}
+
+function Get-CandidatoI4 {
+    <# Apps da Store do usuário alvo com Package Family Name no formato que o I4 aceita. #>
+    param([Parameter(Mandatory)]$Alvo)
+    Get-AppxPackage -User $Alvo.Sid -ErrorAction Stop |
+        Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage -and -not $_.NonRemovable -and [string]$_.SignatureKind -ne 'System' -and
+            $_.PackageFamilyName -match '^[A-Za-z0-9.\-]+_[a-z0-9]{13}$' } |
+        Sort-Object -Property PackageFamilyName -Unique |
+        ForEach-Object { [pscustomobject]@{ Nome = (Get-NomeExibicaoAppx -Pacote $_).Nome; Pfn = $_.PackageFamilyName } } |
+        Sort-Object -Property Nome
+}
+
+function Get-EmpresaExecutavel {
+    <# Empresa nas propriedades de versão do executável, ou $null. #>
+    param([string]$Caminho)
+    if (-not $Caminho -or -not (Test-Path -LiteralPath $Caminho -PathType Leaf)) { return $null }
+    (Get-Item -LiteralPath $Caminho).VersionInfo.CompanyName
+}
+
+function Test-ProgramaMicrosoft {
+    <#
+        Verdadeiro para programa do Windows (%windir%) ou da Microsoft fora dele (Defender em ProgramData, Edge Update).
+        Mais restrito que o I9 e o I10, que só recusam %windir% e \Microsoft\: o Defender é intocável (CLAUDE.md).
+    #>
+    param([string]$Comando)
+    if (Test-ComponenteWindows $Comando) { return $true }
+    [string](Get-EmpresaExecutavel (Get-ExecutavelComando $Comando)) -like 'Microsoft*'
+}
+
+function Get-CandidatoI9 {
+    <#
+        Tarefas agendadas fora de \Microsoft\, não desabilitadas, que executam um programa (handler COM, típico do Windows,
+        fica de fora) e nenhum programa do Windows ou da Microsoft.
+    #>
+    Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\Microsoft\*' -and [string]$_.State -ne 'Disabled' } |
+        Where-Object {
+            $exes = @(@($_.Actions) | Where-Object { $_ -and $_.PSObject.Properties['Execute'] -and $_.Execute } | ForEach-Object { $_.Execute })
+            $exes.Count -and -not @($exes | Where-Object { Test-ProgramaMicrosoft $_ }).Count
+        } |
+        ForEach-Object { [pscustomobject]@{ Caminho = $_.TaskPath + $_.TaskName; Estado = [string]$_.State } } |
+        Sort-Object -Property Caminho
+}
+
+function Get-CandidatoI10 {
+    <# Serviços Win32 de terceiros (nem do Windows nem da Microsoft) com início automático ou manual, como o I10 exige. #>
+    $inicio = @{ 2 = 'Automático'; 3 = 'Manual' }
+    foreach ($s in @(Get-Service -ErrorAction SilentlyContinue | Sort-Object -Property Name)) {
+        $i = Get-InicioServico $s.Name
+        if (-not $i -or -not ($i.Tipo -band 0x30) -or -not $inicio.ContainsKey($i.Start) -or (Test-ProgramaMicrosoft $i.ImagePath)) { continue }
+        [pscustomobject]@{ Nome = $s.Name; Exibicao = $s.DisplayName; Inicio = $inicio[$i.Start] }
+    }
+}
+
+function Get-CandidatoA2 {
+    <# Programas da máquina que o A2 aceita remover (sem Microsoft, sem ferramentas de driver e BIOS, sem os nunca removidos). #>
+    Get-ProgramaMaquina | Where-Object { -not (Get-MotivoProibido -Programa $_ -A2) } | Sort-Object -Property Nome |
+        ForEach-Object { [pscustomobject]@{ Nome = $_.Nome; Fabricante = $_.Fabricante; Versao = $_.Versao; Tipo = $_.Tipo; Id = $_.Id } }
+}
+
+#endregion
