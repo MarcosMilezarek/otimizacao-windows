@@ -16,12 +16,28 @@ Import-Module (Join-Path $PSScriptRoot 'Otimizacao.Comum.psm1') -Force
 #region Catálogo e gravação
 
 # Textos resumidos do cabeçalho de ajuda de cada script (fonte única: o script; nada além do que está lá).
+# Manutencao: Quando (quando usar), Corrige (o que corrige) e Fonte, mostrados no Novo perfil.
 $script:CatalogoPerfil = @(
-    @{ Id = 'M1'; Script = 'Manutencao'; Texto = 'Verifica a imagem do Windows (DISM ScanHealth).'; Perda = 'Disco e CPU ocupados por vários minutos; com reparo aprovado, consome banda de internet (Windows Update).' }
-    @{ Id = 'M2'; Script = 'Manutencao'; Texto = 'Verifica os arquivos de sistema (sfc /verifyonly).'; Perda = 'Disco e CPU ocupados por vários minutos.' }
-    @{ Id = 'M3'; Script = 'Manutencao'; Texto = 'Verifica o sistema de arquivos dos volumes fixos (Repair-Volume -Scan).'; Perda = 'Disco e CPU ocupados por vários minutos.' }
-    @{ Id = 'M4'; Script = 'Manutencao'; Texto = 'Garante o TRIM do NTFS ligado quando há SSD.'; Perda = 'Nada (padrão do Windows).' }
-    @{ Id = 'M8'; Script = 'Manutencao'; Texto = 'Horário ativo do Windows Update por política.'; Perda = 'O usuário não muda mais o horário ativo em Configurações ("gerenciado pela organização") e o ajuste automático do horário ativo é desligado.' }
+    @{ Id = 'M1'; Script = 'Manutencao'; Texto = 'Verifica a imagem do Windows (DISM ScanHealth).'; Perda = 'Disco e CPU ocupados por vários minutos; com reparo aprovado, consome banda de internet (Windows Update).'
+        Quando = 'Antes do M2, sempre que houver sinais de arquivos de sistema danificados, e quando o sfc não conseguir reparar.'
+        Corrige = 'Diz se a imagem do Windows está íntegra, reparável ou não reparável. Com reparo aprovado (RestoreHealth), corrige a imagem, que é a fonte dos arquivos usados pelo sfc, baixando do Windows Update.'
+        Fonte = 'support.microsoft.com KB929833 (rodar o DISM antes do sfc); learn.microsoft.com: Repair a Windows Image' }
+    @{ Id = 'M2'; Script = 'Manutencao'; Texto = 'Verifica os arquivos de sistema (sfc /verifyonly).'; Perda = 'Disco e CPU ocupados por vários minutos.'
+        Quando = 'Recursos do Windows que não funcionam direito, erros do sistema, Windows travando ou parando de responder.'
+        Corrige = 'Arquivos de sistema protegidos corrompidos: com reparo aprovado (sfc /scannow), troca pela cópia guardada. Sem reparo aprovado, só verifica.'
+        Fonte = 'support.microsoft.com KB929833 (System File Checker)' }
+    @{ Id = 'M3'; Script = 'Manutencao'; Texto = 'Verifica o sistema de arquivos dos volumes fixos (Repair-Volume -Scan).'; Perda = 'Disco e CPU ocupados por vários minutos.'
+        Quando = 'Erros de disco ou NTFS na Coleta (M6), ou para conferir o sistema de arquivos sem tirar o disco de uso.'
+        Corrige = 'Nada: só verifica e registra os erros (como chkdsk /scan). Havendo erro, o fluxo para e a correção (chkdsk /spotfix ou /f, com reinicialização) fica manual.'
+        Fonte = 'learn.microsoft.com: Repair-Volume' }
+    @{ Id = 'M4'; Script = 'Manutencao'; Texto = 'Garante o TRIM do NTFS ligado quando há SSD.'; Perda = 'Nada (padrão do Windows).'
+        Quando = 'SSD com o TRIM desligado na Coleta (DisableDeleteNotify = 1). Não usar se ele foi desligado de propósito: alguns dispositivos perdem desempenho com o TRIM.'
+        Corrige = 'Liga o aviso ao SSD dos blocos liberados ao apagar arquivos (TRIM). Em HDD não tem efeito.'
+        Fonte = 'learn.microsoft.com: fsutil behavior (disabledeletenotify)' }
+    @{ Id = 'M8'; Script = 'Manutencao'; Texto = 'Horário ativo do Windows Update por política.'; Perda = 'O usuário não muda mais o horário ativo em Configurações ("gerenciado pela organização") e o ajuste automático do horário ativo é desligado.'
+        Quando = 'O Windows Update reinicia o computador durante o expediente.'
+        Corrige = 'As reinicializações automáticas depois de atualizações passam a acontecer só fora do horário ativo (até 18 h).'
+        Fonte = 'learn.microsoft.com: Manage device restarts after updates' }
     @{ Id = 'A1'; Script = 'Aplicativos'; Texto = 'Remove apps de consumo da lista base (Clipchamp, Notícias, Clima, Solitaire, Xbox, jogos de fábrica etc.).'; Perda = 'Os apps removidos, a gravação de tela Win+G (Game Bar) e o app Xbox; reinstalação manual pela Microsoft Store.'; Aviso = 'Aprovar A1 aprova a lista base inteira.' }
     @{ Id = 'A2'; Script = 'Aplicativos'; Texto = 'Remove programas do fabricante escolhidos (Appx e MSI; EXE fica para remoção manual).'; Perda = 'Os programas removidos; reinstalação manual pela Microsoft Store (Appx) ou pelo instalador do fabricante (MSI).'; Opcao = 'A2Remover' }
     @{ Id = 'A3'; Script = 'Aplicativos'; Texto = 'OneDrive não é removido (para tirá-lo da inicialização, use o I1).'; Perda = 'Nada: informativo.'; Informativo = $true }
@@ -60,36 +76,91 @@ $script:CatalogoPerfil = @(
 )
 
 function Get-CatalogoPerfil {
-    <# Itens do catálogo na ordem de execução dos scripts: Id, Script, Texto, Perda, Aviso, Opcao, Informativo. #>
+    <# Itens do catálogo na ordem de execução dos scripts: Id, Script, Texto, Perda, Aviso, Opcao, Informativo, Quando, Corrige, Fonte. #>
     foreach ($i in $script:CatalogoPerfil) {
         [pscustomobject]@{
             Id = $i.Id; Script = $i.Script; Texto = $i.Texto; Perda = $i.Perda
             Aviso = $i['Aviso']; Opcao = $i['Opcao']; Informativo = [bool]$i['Informativo']
+            Quando = $i['Quando']; Corrige = $i['Corrige']; Fonte = $i['Fonte']
         }
     }
 }
 
-function ConvertFrom-Selecao {
-    <# IDs ou números (1 = primeiro de Validos), separados por espaço ou vírgula, com faixas n-m. Devolve na ordem de Validos. #>
-    [OutputType([string[]])]
-    param([AllowEmptyString()][string]$Texto, [Parameter(Mandatory)][string[]]$Validos)
-    $escolhidos = New-Object System.Collections.Generic.HashSet[string]
-    foreach ($t in @($Texto -split '[\s,;]+' | Where-Object { $_ })) {
-        # Até 4 dígitos (nenhuma lista chega a 10000 itens); limites conferidos antes de montar a faixa.
-        $faixa = [regex]::Match($t, '^(\d{1,4})-(\d{1,4})$')
-        $limites = $null
-        if ($faixa.Success) { $limites = @([int]$faixa.Groups[1].Value, [int]$faixa.Groups[2].Value) }
-        elseif ($t -match '^\d{1,4}$') { $limites = @([int]$t, [int]$t) }
-        if ($null -ne $limites) {
-            if (@($limites | Where-Object { $_ -lt 1 -or $_ -gt $Validos.Count }).Count) { throw [ArgumentException]"Opção '$t' fora da lista (1 a $($Validos.Count))." }
-            foreach ($n in $limites[0]..$limites[1]) { [void]$escolhidos.Add($Validos[$n - 1]) }
-            continue
+function Test-PreSelecionado {
+    <# Item marcado ao abrir o Novo perfil: todos, menos a Manutencao, o informativo A3, o I3 e o I9. #>
+    param([Parameter(Mandatory)]$Item)
+    $Item.Script -ne 'Manutencao' -and -not $Item.Informativo -and $Item.Id -notin 'I3', 'I9'
+}
+
+function Test-NomeCliente {
+    param([AllowEmptyString()][string]$Nome)
+    $Nome -match '^[\w.-]{1,60}$'
+}
+
+function Test-HorarioM8 {
+    <# Horas de 0 a 23 e intervalo de 1 a 18 h, mesma regra do Manutencao. #>
+    param([int]$Inicio, [int]$Fim)
+    $duracao = ($Fim - $Inicio + 24) % 24
+    $Inicio -ge 0 -and $Inicio -le 23 -and $Fim -ge 0 -and $Fim -le 23 -and $duracao -ge 1 -and $duracao -le 18
+}
+
+function New-DadosPerfil {
+    <#
+        Dados do perfil a partir das escolhas da janela: itens marcados (na ordem do catálogo, sem o informativo),
+        escolhas das listas (Id -> valores; no I10, tabela serviço = Manual|Disabled) e opções dos itens marcados.
+        Item de lista sem escolha sai de Aplicar. Devolve Dados (para Save-PerfilGerado) e Desmarcados.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Só monta os dados em memória; quem grava é o Save-PerfilGerado.')]
+    param(
+        [Parameter(Mandatory)][string]$Cliente,
+        [AllowEmptyString()][string]$UsuarioSid = '',
+        [string[]]$Marcados = @(),
+        [hashtable]$Escolhas = @{},
+        [hashtable]$Opcoes = @{}
+    )
+    $aplicar = New-Object System.Collections.Generic.List[string]
+    $desmarcados = New-Object System.Collections.Generic.List[string]
+    $op = @{}
+    foreach ($it in Get-CatalogoPerfil) {
+        if ($Marcados -notcontains $it.Id -or $it.Informativo) { continue }
+        if ($it.Opcao) {
+            $e = $Escolhas[$it.Id]
+            $n = if ($e -is [Collections.IDictionary]) { $e.Count } else { @($e | Where-Object { $_ }).Count }
+            if (-not $n) { $desmarcados.Add($it.Id); continue }
+            $op[$it.Opcao] = if ($e -is [Collections.IDictionary]) { $e } else { @($e | Where-Object { $_ }) }
         }
-        $id = @($Validos | Where-Object { $_ -eq $t })
-        if (-not $id.Count) { throw [ArgumentException]"Opção '$t' não existe na lista." }
-        [void]$escolhidos.Add($id[0])
+        $aplicar.Add($it.Id)
     }
-    $Validos | Where-Object { $escolhidos.Contains($_) }
+    $doItem = @{ M1Reparar = 'M1'; M2Reparar = 'M2'; M8Inicio = 'M8'; M8Fim = 'M8'; V5DesligarInicializacaoRapida = 'V5' }
+    foreach ($k in @($Opcoes.Keys)) { if ($doItem.ContainsKey($k) -and $aplicar.Contains($doItem[$k])) { $op[$k] = $Opcoes[$k] } }
+    [pscustomobject]@{
+        Dados       = @{ Cliente = $Cliente; UsuarioSid = $UsuarioSid; Aplicar = $aplicar.ToArray(); Opcoes = $op }
+        Desmarcados = $desmarcados.ToArray()
+    }
+}
+
+function Get-ResumoPerfil {
+    <# Linhas do resumo antes de gravar: cliente, usuário, itens por script com o escolhido nas listas (Rotulos: Id -> textos) e opções. #>
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)][hashtable]$Dados, [Parameter(Mandatory)][string]$Usuario, [hashtable]$Rotulos = @{}, [string[]]$Desmarcados = @())
+    $l = New-Object System.Collections.Generic.List[string]
+    $l.Add("Cliente:  $($Dados.Cliente)")
+    $l.Add("Usuário:  $Usuario")
+    $catalogo = @(Get-CatalogoPerfil)
+    foreach ($s in @($catalogo | ForEach-Object { $_.Script } | Select-Object -Unique)) {
+        $itens = @($catalogo | Where-Object { $_.Script -eq $s -and $Dados.Aplicar -contains $_.Id })
+        if (-not $itens.Count) { continue }
+        $l.Add('')
+        $l.Add($s)
+        foreach ($it in $itens) {
+            $l.Add(('  {0,-4} {1}' -f $it.Id, $it.Texto))
+            foreach ($r in @($Rotulos[$it.Id])) { if ($r) { $l.Add("         -> $r") } }
+        }
+    }
+    $opcoes = @('M1Reparar', 'M2Reparar', 'M8Inicio', 'M8Fim', 'V5DesligarInicializacaoRapida') | Where-Object { $Dados.Opcoes.ContainsKey($_) }
+    if (@($opcoes).Count) { $l.Add(''); foreach ($k in $opcoes) { $l.Add("  $k = $($Dados.Opcoes[$k])") } }
+    if ($Desmarcados.Count) { $l.Add(''); $l.Add("Desmarcados por nada escolhido na lista: $($Desmarcados -join ', ').") }
+    $l.ToArray()
 }
 
 function ConvertTo-LiteralPerfil {
@@ -252,56 +323,7 @@ function Get-CandidatoA2 {
 
 #endregion
 
-#region Novo perfil (interativo)
-
-function Read-EntradaPerfil {
-    <# Único ponto de leitura do teclado (substituído nos testes). #>
-    param([Parameter(Mandatory)][string]$Pergunta)
-    Read-Host -Prompt $Pergunta
-}
-
-function Read-RespostaPerfil {
-    <# Resposta sem espaços nas pontas; '0' cancela o Novo perfil (exceto onde 0 é valor válido, como as horas do M8). #>
-    param([Parameter(Mandatory)][string]$Pergunta, [switch]$ZeroValido)
-    $r = ([string](Read-EntradaPerfil -Pergunta $Pergunta)).Trim()
-    if ($r -eq '0' -and -not $ZeroValido) { throw [OperationCanceledException]'Novo perfil cancelado.' }
-    $r
-}
-
-function Read-SimNao {
-    param([Parameter(Mandatory)][string]$Pergunta)
-    while ($true) {
-        $r = Read-RespostaPerfil "$Pergunta (S/N)"
-        if ($r -match '^[sS]$') { return $true }
-        if ($r -match '^[nN]$') { return $false }
-    }
-}
-
-function Read-Selecao {
-    <# Pergunta até a resposta ser uma seleção válida (ConvertFrom-Selecao); Enter vazio = nenhum. #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interativo: mensagem só para a tela.')]
-    param([Parameter(Mandatory)][string]$Pergunta, [Parameter(Mandatory)][string[]]$Validos)
-    while ($true) {
-        $r = Read-RespostaPerfil $Pergunta
-        try { return @(ConvertFrom-Selecao -Texto $r -Validos $Validos) }
-        catch [ArgumentException] { Write-Host $_.Exception.Message -ForegroundColor Red }
-    }
-}
-
-function Read-HoraM8 {
-    <# Início e fim do horário ativo: horas 0 a 23 e intervalo de 1 a 18 h, mesma regra do Manutencao. #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interativo: mensagem só para a tela.')]
-    param()
-    while ($true) {
-        $ini = Read-RespostaPerfil 'M8: hora de início do horário ativo (0 a 23)' -ZeroValido
-        $fim = Read-RespostaPerfil 'M8: hora de fim do horário ativo (0 a 23)' -ZeroValido
-        if ($ini -match '^\d{1,2}$' -and $fim -match '^\d{1,2}$' -and [int]$ini -le 23 -and [int]$fim -le 23) {
-            $duracao = ([int]$fim - [int]$ini + 24) % 24
-            if ($duracao -ge 1 -and $duracao -le 18) { return @{ M8Inicio = [int]$ini; M8Fim = [int]$fim } }
-        }
-        Write-Host 'Horas de 0 a 23, com intervalo de 1 a 18 h (limite do Windows).' -ForegroundColor Red
-    }
-}
+#region Novo perfil (janela)
 
 function Get-ListaItem {
     <# Lista lida da máquina para um item de lista: Valor (gravado no perfil) e Rotulo (mostrado). #>
@@ -315,106 +337,301 @@ function Get-ListaItem {
     }
 }
 
-function New-PerfilInterativo {
+function Show-JanelaNovoPerfil {
     <#
-        Monta o perfil por perguntas: cliente, usuário alvo, itens por script (nada marcado), listas lidas da máquina
-        e opções só dos itens marcados, resumo e confirmação. Devolve o caminho gravado, ou $null se cancelado.
+        Assistente do Novo perfil em 5 passos: cliente e usuário alvo; itens por script (pré-selecionados conforme
+        Test-PreSelecionado, com o detalhe do item e, na Manutencao, quando usar e o que corrige); listas lidas da
+        máquina; opções dos itens marcados; resumo e gravação. Usa os auxiliares de janela do Menu (carregado por ele).
+        Devolve o caminho gravado, ou $null se cancelado.
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interativo: texto colorido só para a tela.')]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Grava só depois da confirmação S/N do resumo.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Grava só no último passo, com o botão Gravar perfil.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Pasta', Justification = 'Lido nos manipuladores de evento da janela.')]
     param([Parameter(Mandatory)][string]$Pasta)
-    try {
-        Write-Host ''
-        Write-Host 'Novo perfil (0 cancela em qualquer pergunta, exceto nas horas)' -ForegroundColor Cyan
-        $sobrescrever = $false
-        while ($true) {
-            $cliente = Read-RespostaPerfil 'Nome do cliente (letras, números, ponto, hífen, sublinhado)'
-            if ($cliente -notmatch '^[\w.-]{1,60}$') { Write-Host 'Nome inválido.' -ForegroundColor Red; continue }
-            if (-not (Test-Path -LiteralPath (Join-Path $Pasta "$cliente.psd1"))) { break }
-            if (Read-SimNao "Já existe perfil para $cliente. Sobrescrever?") { $sobrescrever = $true; break }
-        }
+    $cor = $script:CorJanela
+    $fonte = $script:FonteJanela
+    $catalogo = @(Get-CatalogoPerfil)
+    $w = @{ Passo = 0; Sobrescrever = $false; Marcados = @(); Abas = @{}; SidListas = $null; Alvo = $null; Valores = @{}; Opcoes = @{}; Resultado = $null; Arquivo = $null }
 
-        $usuarios = @(Get-UsuarioLocal)
-        Write-Host ''
-        Write-Host 'Usuário alvo (HKCU alterado pelos scripts):' -ForegroundColor Cyan
-        Write-Host '  1. Usuário conectado no momento do fluxo'
-        for ($i = 0; $i -lt $usuarios.Count; $i++) { Write-Host ('  {0}. {1}' -f ($i + 2), $usuarios[$i].Nome) }
-        while ($true) {
-            $r = Read-RespostaPerfil 'Usuário'
-            $n = 0
-            if ([int]::TryParse($r, [ref]$n) -and $n -ge 1 -and $n -le $usuarios.Count + 1) { break }
-        }
-        $sid = if ($n -eq 1) { '' } else { $usuarios[$n - 2].Sid }
+    $f = New-Object Windows.Forms.Form
+    $f.Text = 'Novo perfil'; Set-TamanhoJanela -Janela $f -Largura 1100 -Altura 760 -MinLargura 900 -MinAltura 600
+    $f.StartPosition = 'CenterParent'; $f.Font = $fonte.Normal; $f.BackColor = $cor.Fundo; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
 
-        $catalogo = @(Get-CatalogoPerfil)
-        $marcados = New-Object System.Collections.Generic.List[string]
-        foreach ($grupo in @($catalogo | Group-Object -Property Script | Sort-Object -Property { [array]::IndexOf(@($catalogo.Script), $_.Name) })) {
-            Write-Host ''
-            Write-Host $grupo.Name -ForegroundColor Cyan
-            $itens = @($grupo.Group)
-            for ($i = 0; $i -lt $itens.Count; $i++) {
-                $it = $itens[$i]
-                Write-Host ('  {0,2}. {1,-4} {2}' -f ($i + 1), $it.Id, $it.Texto)
-                Write-Host ('            Perde: {0}{1}' -f $it.Perda, $(if ($it.Aviso) { "  ATENÇÃO: $($it.Aviso)" })) -ForegroundColor DarkGray
-            }
-            foreach ($id in Read-Selecao -Pergunta "Itens de $($grupo.Name) (números ou IDs; Enter = nenhum)" -Validos @($itens.Id)) {
-                if (-not ($itens | Where-Object Id -EQ $id).Informativo) { $marcados.Add($id) }
+    $passos = 'Cliente e usuário', 'Itens por script', 'Listas da máquina', 'Opções', 'Resumo'
+    $lado = New-Object Windows.Forms.Panel; $lado.Dock = 'Left'; $lado.Width = 220; $lado.BackColor = $cor.Branco
+    $rotPassos = @(for ($i = 0; $i -lt $passos.Count; $i++) {
+            $l = New-RotuloJanela -Texto ''; $l.Location = [Drawing.Point]::new(20, 24 + 40 * $i); $lado.Controls.Add($l); $l
+        })
+
+    $rodape = New-Object Windows.Forms.FlowLayoutPanel; $rodape.Dock = 'Bottom'; $rodape.Height = 62; $rodape.FlowDirection = 'RightToLeft'
+    $rodape.Padding = New-Object Windows.Forms.Padding(20, 12, 12, 12); $rodape.BackColor = $cor.Branco
+    $bAvancar = New-BotaoJanela -Texto 'Avançar' -Principal -Largura 140
+    $bVoltar = New-BotaoJanela -Texto 'Voltar' -Largura 110
+    $bCancelar = New-BotaoJanela -Texto 'Cancelar' -Largura 110
+    $rodape.Controls.AddRange(@($bAvancar, $bVoltar, $bCancelar))
+
+    $conteudo = New-Object Windows.Forms.Panel; $conteudo.Dock = 'Fill'; $conteudo.Padding = New-Object Windows.Forms.Padding(24, 16, 24, 8)
+    $paginas = @(for ($i = 0; $i -lt $passos.Count; $i++) { $p = New-Object Windows.Forms.Panel; $p.Dock = 'Fill'; $p.Visible = $false; $conteudo.Controls.Add($p); $p })
+
+    # Passo 1: cliente e usuário alvo.
+    $p1 = New-PilhaJanela
+    $p1.Controls.Add((New-RotuloJanela -Texto 'Cliente e usuário' -Fonte $fonte.Sub))
+    $p1.Controls.Add((New-RotuloJanela -Texto 'Nome do cliente' -Fonte $fonte.Negrito))
+    $txtCliente = New-Object Windows.Forms.TextBox; $txtCliente.Name = 'Cliente'; $txtCliente.Width = 380
+    $p1.Controls.Add($txtCliente)
+    $p1.Controls.Add((New-RotuloJanela -Texto 'Letras, números, ponto, hífen e sublinhado (até 60).' -Cor $cor.Texto2))
+    $rotErro1 = New-RotuloJanela -Texto '' -Cor $cor.Falha; $p1.Controls.Add($rotErro1)
+    $sep = New-RotuloJanela -Texto 'Usuário alvo (as configurações de usuário são gravadas no perfil dele)' -Fonte $fonte.Negrito
+    $sep.Margin = New-Object Windows.Forms.Padding(0, 16, 0, 4); $p1.Controls.Add($sep)
+    $usuarios = @([pscustomobject]@{ Sid = ''; Nome = 'Usuário conectado no momento do fluxo' }) + @(Get-UsuarioLocal)
+    $radios = @(foreach ($u in $usuarios) {
+            $r = New-Object Windows.Forms.RadioButton; $r.Text = $u.Nome; $r.Tag = $u; $r.AutoSize = $true; $r.Margin = New-Object Windows.Forms.Padding(0, 4, 0, 4)
+            $p1.Controls.Add($r); $r
+        })
+    $radios[0].Checked = $true
+    $paginas[0].Controls.Add($p1)
+
+    # Passo 2: catálogo com caixas de marcar e o detalhe do item selecionado.
+    $topo2 = New-PilhaJanela; $topo2.Dock = 'Top'; $topo2.Height = 76; $topo2.AutoScroll = $false
+    $topo2.Controls.Add((New-RotuloJanela -Texto 'Itens por script' -Fonte $fonte.Sub))
+    $rotConta = New-RotuloJanela -Texto '' -Cor $cor.Texto2; $topo2.Controls.Add($rotConta)
+    $cat = New-Object Windows.Forms.ListView
+    $cat.Name = 'Catalogo'; $cat.View = 'Details'; $cat.CheckBoxes = $true; $cat.FullRowSelect = $true; $cat.Dock = 'Fill'; $cat.ShowItemToolTips = $true
+    $cat.BorderStyle = 'FixedSingle'; $cat.HeaderStyle = 'Nonclickable'; $cat.HideSelection = $false
+    foreach ($c in @(@('Item', 70), @('Ajuste', 400), @('O que se perde', 330))) { [void]$cat.Columns.Add($c[0], $c[1]) }
+    foreach ($s in @($catalogo | ForEach-Object { $_.Script } | Select-Object -Unique)) { [void]$cat.Groups.Add($s, $s) }
+    foreach ($i in $catalogo) {
+        $it = New-Object Windows.Forms.ListViewItem($i.Id, $cat.Groups[$i.Script])
+        [void]$it.SubItems.Add($i.Texto)
+        [void]$it.SubItems.Add($(if ($i.Aviso) { "ATENÇÃO: $($i.Aviso)  $($i.Perda)" } else { $i.Perda }))
+        $it.ToolTipText = "$($i.Texto)`nPerde: $($i.Perda)$(if ($i.Aviso) { "`nATENÇÃO: $($i.Aviso)" })$(if ($i.Quando) { "`nQuando usar: $($i.Quando)" })"
+        $it.Tag = $i
+        if ($i.Aviso) { $it.ForeColor = $cor.Execucao }
+        if ($i.Informativo) { $it.ForeColor = $cor.Pendente }
+        $it.Checked = Test-PreSelecionado -Item $i
+        [void]$cat.Items.Add($it)
+    }
+    $contar = { $rotConta.Text = "$(@($cat.CheckedItems).Count) itens marcados. Selecione um item para ver o detalhe." }
+    $cat.Add_ItemCheck({ if ($cat.Items[$_.Index].Tag.Informativo) { $_.NewValue = $_.CurrentValue } })
+    $cat.Add_ItemChecked({ & $contar })
+    & $contar
+    $detalhe = New-PilhaJanela; $detalhe.Dock = 'Bottom'; $detalhe.Height = 190; $detalhe.BackColor = $cor.Branco
+    $detalhe.Padding = New-Object Windows.Forms.Padding(14, 10, 14, 6)
+    $dTitulo = New-RotuloJanela -Texto '' -Fonte $fonte.Negrito -Largura 780
+    $dQuando = New-RotuloJanela -Texto '' -Cor $cor.Acento -Largura 780
+    $dCorrige = New-RotuloJanela -Texto '' -Largura 780
+    $dPerde = New-RotuloJanela -Texto '' -Cor $cor.Texto2 -Largura 780
+    $dFonte = New-RotuloJanela -Texto '' -Fonte $fonte.Pequena -Cor $cor.Pendente -Largura 780
+    $detalhe.Controls.AddRange(@($dTitulo, $dQuando, $dCorrige, $dPerde, $dFonte))
+    $mostrarDetalhe = {
+        param($i)
+        $dTitulo.Text = "$($i.Id)  $($i.Texto)"
+        $dQuando.Text = "Quando usar: $($i.Quando)"
+        $dCorrige.Text = "O que corrige: $($i.Corrige)"
+        $dPerde.Text = "Perde: $($i.Perda)$(if ($i.Aviso) { "   ATENÇÃO: $($i.Aviso)" })"
+        $dFonte.Text = "Fonte: $($i.Fonte)"
+        foreach ($l in @($dQuando, $dCorrige, $dFonte)) { $l.Visible = [bool]$i.Quando }
+    }
+    $cat.Add_SelectedIndexChanged({ if ($cat.SelectedItems.Count) { & $mostrarDetalhe $cat.SelectedItems[0].Tag } })
+    & $mostrarDetalhe $catalogo[0]
+    $paginas[1].Controls.Add($cat); $paginas[1].Controls.Add($detalhe); $paginas[1].Controls.Add($topo2)
+
+    # Passo 3: listas lidas da máquina, uma aba por item marcado que usa lista.
+    $abas = New-Object Windows.Forms.TabControl; $abas.Name = 'Listas'; $abas.Dock = 'Fill'; $abas.Padding = [Drawing.Point]::new(14, 6)
+    $rotListas = New-RotuloJanela -Texto '' -Cor $cor.Texto2 -Largura 800; $rotListas.Dock = 'Top'
+    $tit3 = New-RotuloJanela -Texto 'Listas da máquina' -Fonte $fonte.Sub; $tit3.Dock = 'Top'
+    $paginas[2].Controls.Add($abas); $paginas[2].Controls.Add($rotListas); $paginas[2].Controls.Add($tit3)
+
+    # Passo 4: opções dos itens marcados (montado ao entrar).
+    $p4 = New-PilhaJanela; $paginas[3].Controls.Add($p4)
+
+    # Passo 5: resumo.
+    $resumo = New-Object Windows.Forms.TextBox; $resumo.Name = 'Resumo'; $resumo.Multiline = $true; $resumo.ReadOnly = $true; $resumo.ScrollBars = 'Vertical'
+    $resumo.Dock = 'Fill'; $resumo.Font = $fonte.Mono; $resumo.BackColor = $cor.Branco
+    $tit5 = New-RotuloJanela -Texto 'Resumo' -Fonte $fonte.Sub; $tit5.Dock = 'Top'
+    $paginas[4].Controls.Add($resumo); $paginas[4].Controls.Add($tit5)
+
+    $montarListas = {
+        $sid = ($radios | Where-Object Checked).Tag.Sid
+        if ($w.SidListas -ne $sid) { foreach ($id in 'I1', 'I4') { $w.Abas.Remove($id) }; $w.Alvo = $null; $w.SidListas = $sid }
+        $comLista = @($w.Marcados | Where-Object { $_.Opcao })
+        foreach ($id in @($w.Abas.Keys)) { if (@($comLista | Where-Object Id -EQ $id).Count -eq 0) { $w.Abas.Remove($id) } }
+        $abas.TabPages.Clear()
+        $rotListas.Text = if ($comLista.Count) { 'Marque o que entra em cada item. Item sem nada marcado é desmarcado.' } else { 'Nenhum item marcado usa lista lida da máquina. Avance.' }
+        $f.Cursor = 'WaitCursor'
+        try {
+            foreach ($i in $comLista) {
+                if (-not $w.Abas.ContainsKey($i.Id)) {
+                    $aba = New-Object Windows.Forms.TabPage($i.Id); $aba.Padding = New-Object Windows.Forms.Padding(8); $aba.BackColor = $cor.Branco
+                    $grade = $null
+                    try {
+                        if ($i.Id -in 'I1', 'I4' -and -not $w.Alvo) { $w.Alvo = if ($sid) { Get-UsuarioAlvo -Sid $sid } else { Get-UsuarioAlvo } }
+                        $lista = @(Get-ListaItem -Id $i.Id -Alvo $w.Alvo)
+                        $msg = if ($lista.Count) { $i.Texto } else { 'Nada encontrado nesta máquina. O item será desmarcado.' }
+                    }
+                    catch { $lista = @(); $msg = "Não foi possível ler a lista ($($_.Exception.Message)). O item será desmarcado." }
+                    if ($lista.Count) {
+                        $grade = New-Object Windows.Forms.DataGridView
+                        $grade.Dock = 'Fill'; $grade.AllowUserToAddRows = $false; $grade.AllowUserToDeleteRows = $false; $grade.RowHeadersVisible = $false
+                        $grade.BackgroundColor = $cor.Branco; $grade.BorderStyle = 'None'; $grade.SelectionMode = 'FullRowSelect'; $grade.AutoSizeColumnsMode = 'Fill'
+                        $grade.ColumnHeadersHeightSizeMode = 'AutoSize'; $grade.RowTemplate.Height = 30; $grade.EditMode = 'EditOnEnter'
+                        $cc = New-Object Windows.Forms.DataGridViewCheckBoxColumn; $cc.HeaderText = 'Escolher'; $cc.FillWeight = 12; [void]$grade.Columns.Add($cc)
+                        $ct = New-Object Windows.Forms.DataGridViewTextBoxColumn; $ct.HeaderText = 'Encontrado nesta máquina'; $ct.ReadOnly = $true; $ct.FillWeight = 70; [void]$grade.Columns.Add($ct)
+                        if ($i.Id -eq 'I10') {
+                            $cb = New-Object Windows.Forms.DataGridViewComboBoxColumn; $cb.HeaderText = 'Tipo de início'; $cb.FillWeight = 18
+                            [void]$cb.Items.AddRange(@('Manual', 'Desativado')); [void]$grade.Columns.Add($cb)
+                        }
+                        foreach ($v in $lista) {
+                            $n = if ($i.Id -eq 'I10') { $grade.Rows.Add($false, $v.Rotulo, 'Manual') } else { $grade.Rows.Add($false, $v.Rotulo) }
+                            $grade.Rows[$n].Tag = $v
+                        }
+                        $aba.Controls.Add($grade)
+                    }
+                    $rot = New-RotuloJanela -Texto $msg -Cor $(if ($lista.Count) { $cor.Texto2 } else { $cor.Execucao }) -Largura 760; $rot.Dock = 'Top'
+                    $aba.Controls.Add($rot)
+                    $w.Abas[$i.Id] = [pscustomobject]@{ Aba = $aba; Grade = $grade }
+                }
+                $abas.TabPages.Add($w.Abas[$i.Id].Aba)
             }
         }
-        if (-not $marcados.Count) { Write-Host 'Nenhum item marcado. Nada foi gravado.' -ForegroundColor Yellow; return $null }
+        finally { $f.Cursor = 'Default' }
+    }
 
-        $opcoes = @{}
-        $rotulos = @{}
-        $alvo = $null
-        foreach ($it in @($catalogo | Where-Object { $_.Opcao -and $marcados.Contains($_.Id) })) {
-            try {
-                if ($it.Id -in 'I1', 'I4' -and -not $alvo) { $alvo = if ($sid) { Get-UsuarioAlvo -Sid $sid } else { Get-UsuarioAlvo } }
-                $lista = @(Get-ListaItem -Id $it.Id -Alvo $alvo)
-            }
-            catch { Write-Host "$($it.Id): não foi possível ler a lista ($($_.Exception.Message)). Item desmarcado." -ForegroundColor Yellow; [void]$marcados.Remove($it.Id); continue }
-            if (-not $lista.Count) { Write-Host "$($it.Id): nada encontrado nesta máquina. Item desmarcado." -ForegroundColor Yellow; [void]$marcados.Remove($it.Id); continue }
-            Write-Host ''
-            Write-Host "$($it.Id): $($it.Texto)" -ForegroundColor Cyan
-            for ($i = 0; $i -lt $lista.Count; $i++) { Write-Host ('  {0,2}. {1}' -f ($i + 1), $lista[$i].Rotulo) }
-            $escolha = @(Read-Selecao -Pergunta "Escolha para $($it.Id) (números; Enter = nenhum)" -Validos @($lista.Valor))
-            if (-not $escolha.Count) { Write-Host "$($it.Id): nada escolhido. Item desmarcado." -ForegroundColor Yellow; [void]$marcados.Remove($it.Id); continue }
-            # O resumo mostra o que foi escolhido pelo nome (no A2 o perfil guarda só o Id).
-            $rotulos[$it.Id] = @($lista | Where-Object { $escolha -contains $_.Valor } | ForEach-Object { $_.Rotulo })
-            if ($it.Id -eq 'I10') {
+    $lerEscolhas = {
+        # Valores marcados de cada lista e os textos para o resumo; no I10, serviço = Manual|Disabled.
+        $escolhas = @{}; $rotulos = @{}
+        foreach ($id in @($w.Abas.Keys)) {
+            $g = $w.Abas[$id].Grade
+            if (-not $g) { continue }
+            [void]$g.EndEdit()
+            $linhas = @($g.Rows | Where-Object { $_.Cells[0].Value -eq $true })
+            if ($id -eq 'I10') {
                 $mapa = @{}
-                foreach ($s in $escolha) {
-                    while ($true) {
-                        $t = Read-RespostaPerfil "I10: $s fica (M) Manual ou (D) Desativado?"
-                        if ($t -match '^[mM]$') { $mapa[$s] = 'Manual'; break }
-                        if ($t -match '^[dD]$') { $mapa[$s] = 'Disabled'; break }
+                foreach ($r in $linhas) { $mapa[$r.Tag.Valor] = if ($r.Cells[2].Value -eq 'Desativado') { 'Disabled' } else { 'Manual' } }
+                $escolhas[$id] = $mapa
+                $rotulos[$id] = @($linhas | ForEach-Object { "$($_.Tag.Rotulo) = $($mapa[$_.Tag.Valor])" })
+            }
+            else {
+                $escolhas[$id] = @($linhas | ForEach-Object { $_.Tag.Valor })
+                $rotulos[$id] = @($linhas | ForEach-Object { $_.Tag.Rotulo })
+            }
+        }
+        [pscustomobject]@{ Escolhas = $escolhas; Rotulos = $rotulos }
+    }
+
+    $guardarOpcoes = {
+        foreach ($k in @($w.Opcoes.Keys)) {
+            $c = $w.Opcoes[$k]
+            $w.Valores[$k] = if ($c -is [Windows.Forms.CheckBox]) { $c.Checked } else { [int]$c.Value }
+        }
+    }
+
+    $montarOpcoes = {
+        $p4.Controls.Clear(); $w.Opcoes = @{}
+        $p4.Controls.Add((New-RotuloJanela -Texto 'Opções' -Fonte $fonte.Sub))
+        $ids = @($w.Marcados | ForEach-Object { $_.Id })
+        $alguma = $false
+        foreach ($o in @(
+                @('M1', 'M1Reparar', 'Reparar a imagem do Windows se a verificação achar problema (baixa pelo Windows Update).')
+                @('M2', 'M2Reparar', 'Rodar sfc /scannow se a verificação achar problema.')
+                @('V5', 'V5DesligarInicializacaoRapida', 'Desligar a inicialização rápida.'))) {
+            if ($ids -notcontains $o[0]) { continue }
+            $alguma = $true
+            $c = New-Object Windows.Forms.CheckBox; $c.Name = $o[1]; $c.Text = "$($o[0]): $($o[2])"; $c.AutoSize = $true
+            $c.Margin = New-Object Windows.Forms.Padding(0, 8, 0, 4); $c.Checked = [bool]$w.Valores[$o[1]]
+            $p4.Controls.Add($c); $w.Opcoes[$o[1]] = $c
+            $q = ($catalogo | Where-Object Id -EQ $o[0]).Quando
+            if ($q) { $r = New-RotuloJanela -Texto "Quando usar: $q" -Cor $cor.Texto2 -Largura 760; $r.Margin = New-Object Windows.Forms.Padding(18, 0, 0, 8); $p4.Controls.Add($r) }
+        }
+        if ($ids -contains 'M8') {
+            $alguma = $true
+            $t = New-RotuloJanela -Texto 'M8: horário ativo do Windows Update' -Fonte $fonte.Negrito; $t.Margin = New-Object Windows.Forms.Padding(0, 12, 0, 4)
+            $p4.Controls.Add($t)
+            $linha = New-Object Windows.Forms.FlowLayoutPanel; $linha.AutoSize = $true; $linha.WrapContents = $false
+            $ini = New-Object Windows.Forms.NumericUpDown; $ini.Name = 'M8Inicio'; $ini.Minimum = 0; $ini.Maximum = 23; $ini.Width = 70
+            $fim = New-Object Windows.Forms.NumericUpDown; $fim.Name = 'M8Fim'; $fim.Minimum = 0; $fim.Maximum = 23; $fim.Width = 70
+            # Padrão do Windows: 8 h às 17 h (learn.microsoft.com: Manage device restarts after updates).
+            $ini.Value = if ($w.Valores.ContainsKey('M8Inicio')) { $w.Valores['M8Inicio'] } else { 8 }
+            $fim.Value = if ($w.Valores.ContainsKey('M8Fim')) { $w.Valores['M8Fim'] } else { 17 }
+            $l1 = New-RotuloJanela -Texto 'Das'; $l1.Margin = New-Object Windows.Forms.Padding(0, 6, 6, 0)
+            $l2 = New-RotuloJanela -Texto 'h às'; $l2.Margin = New-Object Windows.Forms.Padding(6, 6, 6, 0)
+            $l3 = New-RotuloJanela -Texto 'h'; $l3.Margin = New-Object Windows.Forms.Padding(6, 6, 0, 0)
+            $linha.Controls.AddRange(@($l1, $ini, $l2, $fim, $l3))
+            $p4.Controls.Add($linha)
+            $m8 = $catalogo | Where-Object Id -EQ 'M8'
+            $p4.Controls.Add((New-RotuloJanela -Texto "Intervalo de 1 a 18 h (limite do Windows). Use o horário de trabalho do cliente. Quando usar: $($m8.Quando)" -Cor $cor.Texto2 -Largura 760))
+            $w.Opcoes['M8Inicio'] = $ini; $w.Opcoes['M8Fim'] = $fim
+        }
+        $w.ErroOpcoes = New-RotuloJanela -Texto '' -Cor $cor.Falha; $p4.Controls.Add($w.ErroOpcoes)
+        if (-not $alguma) { $p4.Controls.Add((New-RotuloJanela -Texto 'Nenhum item marcado tem opções. Avance.' -Cor $cor.Texto2)) }
+    }
+
+    $mostrar = {
+        for ($i = 0; $i -lt $passos.Count; $i++) {
+            $paginas[$i].Visible = ($i -eq $w.Passo)
+            $rotPassos[$i].Font = if ($i -eq $w.Passo) { $fonte.Negrito } else { $fonte.Normal }
+            $rotPassos[$i].ForeColor = if ($i -eq $w.Passo) { $cor.Acento } elseif ($i -lt $w.Passo) { $cor.OK } else { $cor.Pendente }
+            $rotPassos[$i].Text = '{0}  {1}' -f $(if ($i -lt $w.Passo) { '✓' } else { "$($i + 1)." }), $passos[$i]
+        }
+        $bVoltar.Enabled = $w.Passo -gt 0
+        $bAvancar.Text = if ($w.Passo -eq $passos.Count - 1) { 'Gravar perfil' } else { 'Avançar' }
+    }
+
+    $bAvancar.Add_Click({
+            Invoke-AcaoJanela -Janela $f -Acao {
+                switch ($w.Passo) {
+                    0 {
+                        $nome = $txtCliente.Text.Trim()
+                        if (-not (Test-NomeCliente $nome)) { $rotErro1.Text = 'Nome inválido.'; return }
+                        $rotErro1.Text = ''
+                        $w.Sobrescrever = $false
+                        if (Test-Path -LiteralPath (Join-Path $Pasta "$nome.psd1")) {
+                            if (-not (Test-PerguntaJanela -Janela $f -Texto "Já existe perfil para $nome. Sobrescrever?" -Titulo 'Novo perfil')) { return }
+                            $w.Sobrescrever = $true
+                        }
+                    }
+                    1 {
+                        $w.Marcados = @($cat.CheckedItems | ForEach-Object { $_.Tag } | Where-Object { -not $_.Informativo })
+                        if (-not $w.Marcados.Count) { Show-AvisoJanela -Janela $f -Texto 'Marque ao menos um item.' -Titulo 'Novo perfil'; return }
+                        & $montarListas
+                    }
+                    2 { & $montarOpcoes }
+                    3 {
+                        & $guardarOpcoes
+                        if ($w.Opcoes.ContainsKey('M8Inicio') -and -not (Test-HorarioM8 -Inicio $w.Valores['M8Inicio'] -Fim $w.Valores['M8Fim'])) {
+                            $w.ErroOpcoes.Text = 'M8: intervalo de 1 a 18 h (limite do Windows).'; return
+                        }
+                        $lido = & $lerEscolhas
+                        $opcoes = @{}; foreach ($k in @($w.Opcoes.Keys)) { $opcoes[$k] = $w.Valores[$k] }
+                        $u = ($radios | Where-Object Checked).Tag
+                        $w.Resultado = New-DadosPerfil -Cliente $txtCliente.Text.Trim() -UsuarioSid $u.Sid -Marcados @($w.Marcados | ForEach-Object { $_.Id }) -Escolhas $lido.Escolhas -Opcoes $opcoes
+                        $resumo.Text = (Get-ResumoPerfil -Dados $w.Resultado.Dados -Usuario $u.Nome -Rotulos $lido.Rotulos -Desmarcados $w.Resultado.Desmarcados) -join "`r`n"
+                    }
+                    4 {
+                        if (-not @($w.Resultado.Dados.Aplicar).Count) { Show-AvisoJanela -Janela $f -Texto 'Nenhum item restou marcado. Nada foi gravado.' -Titulo 'Novo perfil'; return }
+                        $w.Arquivo = Save-PerfilGerado -Dados $w.Resultado.Dados -Pasta $Pasta -Force:$w.Sobrescrever
+                        $f.DialogResult = 'OK'
+                        return
                     }
                 }
-                $opcoes[$it.Opcao] = $mapa
-                $rotulos[$it.Id] = @($lista | Where-Object { $mapa.ContainsKey($_.Valor) } | ForEach-Object { "$($_.Rotulo) = $($mapa[$_.Valor])" })
+                $w.Passo++
+                & $mostrar
             }
-            else { $opcoes[$it.Opcao] = $escolha }
-        }
-        if (-not $marcados.Count) { Write-Host 'Nenhum item restou marcado. Nada foi gravado.' -ForegroundColor Yellow; return $null }
+        })
+    $bVoltar.Add_Click({
+            if ($w.Passo -eq 3) { & $guardarOpcoes }
+            $w.Passo--; & $mostrar
+        })
+    $bCancelar.Add_Click({ $f.Close() })
+    $f.Add_FormClosing({
+            if ($f.DialogResult -ne 'OK' -and -not (Test-PerguntaJanela -Janela $f -Texto 'Cancelar o novo perfil? Nada será gravado.' -Titulo 'Novo perfil')) { $_.Cancel = $true }
+        })
 
-        if ($marcados.Contains('M1')) { $opcoes['M1Reparar'] = Read-SimNao 'M1: reparar a imagem se a verificação achar problema (baixa pelo Windows Update)?' }
-        if ($marcados.Contains('M2')) { $opcoes['M2Reparar'] = Read-SimNao 'M2: rodar sfc /scannow se a verificação achar problema?' }
-        if ($marcados.Contains('M8')) { $h = Read-HoraM8; $opcoes['M8Inicio'] = $h.M8Inicio; $opcoes['M8Fim'] = $h.M8Fim }
-        if ($marcados.Contains('V5')) { $opcoes['V5DesligarInicializacaoRapida'] = Read-SimNao 'V5: desligar a inicialização rápida?' }
-
-        $aplicar = @($catalogo | Where-Object { $marcados.Contains($_.Id) } | ForEach-Object { $_.Id })
-        Write-Host ''
-        Write-Host "Resumo: cliente $cliente, usuário $(if ($sid) { ($usuarios | Where-Object Sid -EQ $sid).Nome } else { 'conectado no momento do fluxo' })" -ForegroundColor Cyan
-        foreach ($it in @($catalogo | Where-Object { $marcados.Contains($_.Id) })) {
-            Write-Host ('  {0,-4} {1}' -f $it.Id, $it.Texto)
-            foreach ($r in @($rotulos[$it.Id])) { if ($r) { Write-Host "         -> $r" } }
-        }
-        foreach ($k in @('M1Reparar', 'M2Reparar', 'M8Inicio', 'M8Fim', 'V5DesligarInicializacaoRapida') | Where-Object { $opcoes.ContainsKey($_) }) { Write-Host "  $k = $($opcoes[$k])" }
-        if (-not (Read-SimNao 'Gravar este perfil?')) { Write-Host 'Nada foi gravado.'; return $null }
-        $arquivo = Save-PerfilGerado -Dados @{ Cliente = $cliente; UsuarioSid = $sid; Aplicar = $aplicar; Opcoes = $opcoes } -Pasta $Pasta -Force:$sobrescrever
-        Write-Host "Perfil gravado: $arquivo" -ForegroundColor Green
-        $arquivo
-    }
-    catch [OperationCanceledException] { Write-Host 'Novo perfil cancelado. Nada foi gravado.' -ForegroundColor Yellow; $null }
+    $f.Controls.Add($conteudo); $f.Controls.Add($lado); $f.Controls.Add($rodape)
+    & $mostrar
+    $f.Tag = $w
+    [void]$f.ShowDialog()
+    $f.Dispose()
+    $w.Arquivo
 }
 
 #endregion

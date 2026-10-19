@@ -3,14 +3,16 @@
     Menu principal: escolhe o perfil do cliente e a ação, e conduz sozinho o fluxo completo, com as reinicializações.
 
 .DESCRIPTION
-    Sem parâmetros abre o menu (exige administrador):
-      1  Simular: executa com -WhatIf cada script com item no perfil, na ordem do fluxo. Nada é alterado.
-      2  Fluxo completo: simula, mostra as etapas e pede uma única confirmação (S/N). Depois disso não há nenhum
-         prompt: o fluxo segue por uma tarefa agendada que roda como SYSTEM a cada inicialização.
-      3  Só verificar: executa a Verificacao agora e mostra o resultado.
-      4  Reverter: simula a reversão dos scripts com sessão não revertida, pede confirmação (S/N) e reverte na ordem
-         inversa (Limpeza, VisualEnergia, Inicializacao, Aplicativos, Manutencao).
-      5  Cancelar o fluxo em andamento (com fluxo em andamento, é a única ação disponível além de sair).
+    Sem parâmetros abre a janela do menu (exige administrador): perfis de cliente à esquerda, com Novo perfil
+    (assistente em janela, src\Perfil.ps1), e à direita os itens do perfil escolhido, as ações e a saída dos scripts,
+    que rodam em processo separado, um por vez:
+      Fluxo completo: simula, mostra as etapas e pede uma única confirmação. Depois disso não há nenhuma pergunta:
+        o fluxo segue por uma tarefa agendada que roda como SYSTEM a cada inicialização.
+      Simular: executa com -WhatIf cada script com item no perfil, na ordem do fluxo. Nada é alterado.
+      Só verificar agora: executa a Verificacao e mostra o resultado.
+      Reverter: simula a reversão dos scripts com sessão não revertida, pede confirmação e reverte na ordem
+        inversa (Limpeza, VisualEnergia, Inicializacao, Aplicativos, Manutencao).
+    Com fluxo em andamento, o menu abre a janela de acompanhamento, com o botão Cancelar fluxo.
 
     Etapas do fluxo completo (script sem item aplicável no perfil é omitido):
       Reiniciar; Coleta antes 1 (espera alguém entrar no Windows); Reiniciar; Coleta antes 2 (espera logon); Reiniciar;
@@ -19,7 +21,13 @@
       logon); comparação antes e depois (HTML); Verificacao por último, com a mensagem aberta no Bloco de Notas na
       sessão do usuário conectado.
     As coletas esperam logon porque o tempo de boot (evento 100 de Diagnostics-Performance) só é gravado depois dele e
-    os programas de inicialização do usuário só rodam com alguém conectado.
+    os programas de inicialização do usuário só rodam com alguém conectado. "Alguém conectado" é qualquer sessão
+    interativa ativa (console, Área de Trabalho Remota, AnyDesk), lida pela API WTS.
+
+    Acompanhamento: a cada logon do usuário alvo durante o fluxo abre uma janela com as etapas, o status de cada uma e
+    o fim do fluxo.log, atualizada sozinha (tarefa \Otimizacao\Acompanhar, parâmetro -Acompanhar; o console do
+    PowerShell fica oculto e só a janela aparece). Fechá-la não afeta o fluxo. Abrir o Menu com um fluxo em andamento
+    mostra a mesma janela.
 
     O fluxo para, remove a tarefa e mostra o motivo quando: um script termina com erro (código de saída diferente de 0,
     inclusive pré-checagem bloqueada e falha no ponto de restauração), a Manutencao registra achado (corrupção ou erro
@@ -35,23 +43,32 @@
 .PARAMETER Continuar
     Uso interno da tarefa agendada: pasta do fluxo a continuar. Não interativo.
 
+.PARAMETER Acompanhar
+    Uso interno da tarefa agendada de logon: pasta do fluxo a mostrar na janela de acompanhamento (somente leitura;
+    o botão Cancelar fluxo só aparece se a janela estiver elevada).
+
 .EXAMPLE
     .\Menu.ps1
 
 .NOTES
-    O que altera: cria a tarefa \Otimizacao\Fluxo (SYSTEM, na inicialização), removida ao concluir, falhar ou cancelar,
+    O que altera: cria a tarefa \Otimizacao\Fluxo (SYSTEM, na inicialização) e a \Otimizacao\Acompanhar (usuário alvo,
+    no logon, abre a janela de acompanhamento), ambas removidas ao concluir, falhar ou cancelar,
     e por alguns segundos a tarefa \Otimizacao\Mensagem (usuário conectado), que abre a mensagem final. Reinicia o
     computador nas etapas do fluxo, com aviso de 60 s quando há alguém conectado. Os scripts chamados alteram o sistema
     conforme o perfil, cada um com o próprio ponto de restauração e backup.
     O que se perde: o uso do computador durante o fluxo (cerca de 1 h 30 a 2 h, com as três coletas).
-    Reversão: opção 4 do menu. Cancelar sem o menu: Unregister-ScheduledTask -TaskPath '\Otimizacao\' -TaskName Fluxo.
+    Reversão: botão Reverter do menu. Cancelar sem o menu: Unregister-ScheduledTask -TaskPath '\Otimizacao\' -TaskName Fluxo
+    (e Acompanhar).
+    A janela de acompanhamento acompanha as três coletas (ocupa pouco: lê um JSON a cada 10 s), igual em todas.
     Política de execução definida por GPO (MachinePolicy AllSigned) impede -ExecutionPolicy Bypass e o fluxo.
 #>
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Menu interativo: texto colorido só para a tela. A parte executada pela tarefa não usa Write-Host.')]
 [CmdletBinding(DefaultParameterSetName = 'Menu')]
 param(
     [Parameter(ParameterSetName = 'Continuar', Mandatory)]
-    [string]$Continuar
+    [string]$Continuar,
+
+    [Parameter(ParameterSetName = 'Acompanhar', Mandatory)]
+    [string]$Acompanhar
 )
 
 Import-Module (Join-Path $PSScriptRoot 'Otimizacao.Comum.psm1') -Force
@@ -61,6 +78,7 @@ $script:PowerShellExe = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\p
 $script:PastaTarefa = '\Otimizacao\'
 $script:TarefaFluxo = 'Fluxo'
 $script:TarefaMensagem = 'Mensagem'
+$script:TarefaAcompanhar = 'Acompanhar'
 $script:MaxReinicioPendente = 2
 $script:AvisoReinicioSegundos = 60
 
@@ -171,6 +189,21 @@ function Register-TarefaFluxo {
         -Principal $principal -Settings $cfg -Force -ErrorAction Stop | Out-Null
 }
 
+function Register-TarefaAcompanhar {
+    <#
+        Janela de acompanhamento a cada logon do usuário alvo (logon interativo, sem senha), elevada se ele for
+        administrador. Console oculto: a janela é de WinForms.
+    #>
+    param([Parameter(Mandatory)][string]$Pasta, [Parameter(Mandatory)][string]$UsuarioSid)
+    $usuario = ([Security.Principal.SecurityIdentifier]$UsuarioSid).Translate([Security.Principal.NTAccount]).Value
+    $menu = Join-Path $Pasta 'src\Menu.ps1'
+    $acao = New-ScheduledTaskAction -Execute $script:PowerShellExe -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -Acompanhar "{1}"' -f $menu, $Pasta)
+    $principal = New-ScheduledTaskPrincipal -UserId $usuario -LogonType Interactive -RunLevel Highest
+    $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskPath $script:PastaTarefa -TaskName $script:TarefaAcompanhar -Action $acao -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $usuario) `
+        -Principal $principal -Settings $cfg -Force -ErrorAction Stop | Out-Null
+}
+
 function Remove-TarefaOtimizacao {
     <# Remove a tarefa indicada e, se ficar vazia, a pasta \Otimizacao\ do Agendador. #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Remove só as tarefas criadas por este script.')]
@@ -183,6 +216,14 @@ function Remove-TarefaOtimizacao {
         if (-not $pasta.GetTasks(1).Count -and -not $pasta.GetFolders(0).Count) { $servico.GetFolder('\').DeleteFolder($pasta.Name, 0) }
     }
     catch { Write-Verbose "Pasta do Agendador mantida: $($_.Exception.Message)" }
+}
+
+function Remove-TarefasFluxo {
+    <# Remove a janela de acompanhamento e, por último, a tarefa do fluxo (a pasta do Agendador some junto). #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Remove só as tarefas criadas por este script.')]
+    param()
+    Remove-TarefaOtimizacao -Nome $script:TarefaAcompanhar
+    Remove-TarefaOtimizacao -Nome $script:TarefaFluxo
 }
 
 function Start-FluxoOtimizacao {
@@ -232,6 +273,9 @@ function Start-FluxoOtimizacao {
     Save-EstadoFluxo -Pasta $pasta -Estado $estado
     Write-RegistroFluxo -Pasta $pasta -Texto "Fluxo criado por $($estado.IniciadoPor) com $($estado.Etapas.Count) etapas: $($scripts -join ', ')."
     Register-TarefaFluxo -Pasta $pasta
+    # A janela é conforto: se não registrar, o fluxo segue e o motivo fica no log.
+    try { Register-TarefaAcompanhar -Pasta $pasta -UsuarioSid $UsuarioSid }
+    catch { Write-RegistroFluxo -Pasta $pasta -Texto "Janela de acompanhamento não registrada: $($_.Exception.Message)" }
     $pasta
 }
 
@@ -239,9 +283,71 @@ function Start-FluxoOtimizacao {
 
 #region Execução das etapas (tarefa agendada, sem interação)
 
+function Get-SessaoInterativa {
+    <#
+        Sessões com usuário, pela API WTS: Id, Estado (0 = ativa, 4 = desconectada) e Usuario (DOMINIO\conta).
+        Win32_ComputerSystem.UserName só enxerga o console: sessões de Área de Trabalho Remota e de AnyDesk voltam vazias.
+    #>
+    if (-not ('OtimizacaoWts' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public static class OtimizacaoWts
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SessionInfo { public int SessionId; public IntPtr WinStationName; public int State; }
+
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    private static extern bool WTSEnumerateSessionsW(IntPtr server, int reserved, int version, out IntPtr info, out int count);
+
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    private static extern bool WTSQuerySessionInformationW(IntPtr server, int sessionId, int infoClass, out IntPtr buffer, out int bytes);
+
+    [DllImport("wtsapi32.dll")]
+    private static extern void WTSFreeMemory(IntPtr memory);
+
+    private static string Consultar(int id, int classe)
+    {
+        IntPtr buffer; int bytes;
+        if (!WTSQuerySessionInformationW(IntPtr.Zero, id, classe, out buffer, out bytes)) return "";
+        try { return Marshal.PtrToStringUni(buffer) ?? ""; } finally { WTSFreeMemory(buffer); }
+    }
+
+    // Uma linha por sessão com usuário: Id|Estado|Dominio|Usuario (WTSUserName = 5, WTSDomainName = 7).
+    public static string[] Listar()
+    {
+        IntPtr info; int count;
+        if (!WTSEnumerateSessionsW(IntPtr.Zero, 0, 1, out info, out count))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        var lista = new List<string>();
+        try
+        {
+            int tamanho = Marshal.SizeOf(typeof(SessionInfo));
+            for (int i = 0; i < count; i++)
+            {
+                var s = (SessionInfo)Marshal.PtrToStructure(new IntPtr(info.ToInt64() + (long)i * tamanho), typeof(SessionInfo));
+                string usuario = Consultar(s.SessionId, 5);
+                if (usuario.Length == 0) continue;
+                lista.Add(s.SessionId + "|" + s.State + "|" + Consultar(s.SessionId, 7) + "|" + usuario);
+            }
+        }
+        finally { WTSFreeMemory(info); }
+        return lista.ToArray();
+    }
+}
+'@
+    }
+    foreach ($linha in [OtimizacaoWts]::Listar()) {
+        $p = $linha.Split('|')
+        [pscustomobject]@{ Id = [int]$p[0]; Estado = [int]$p[1]; Usuario = $(if ($p[2]) { "$($p[2])\$($p[3])" } else { $p[3] }) }
+    }
+}
+
 function Get-UsuarioConectado {
-    <# Conta conectada ao console, ou vazio. #>
-    [string](Get-CimInstance Win32_ComputerSystem).UserName
+    <# Conta com sessão interativa ativa (console, Área de Trabalho Remota ou AnyDesk), ou vazio. Sessão 0 não conta. #>
+    [string](@(Get-SessaoInterativa | Where-Object { $_.Estado -eq 0 -and $_.Id -ne 0 } | Sort-Object -Property Id | Select-Object -First 1 | ForEach-Object { $_.Usuario }))
 }
 
 function Wait-Logon {
@@ -451,7 +557,7 @@ function Show-MensagemPendente {
         $Estado.MensagemExibida = $true
         Save-EstadoFluxo -Pasta $Pasta -Estado $Estado
     }
-    Remove-TarefaOtimizacao -Nome $script:TarefaFluxo
+    Remove-TarefasFluxo
 }
 
 function Invoke-FluxoOtimizacao {
@@ -461,13 +567,13 @@ function Invoke-FluxoOtimizacao {
     try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { Write-Verbose 'Console sem codificação ajustável.' }
     $estado = Get-EstadoFluxo -Pasta $Pasta
     if ($estado.Status -in 'Concluido', 'Interrompido') { return Show-MensagemPendente -Estado $estado -Pasta $Pasta }
-    if ($estado.Status -ne 'EmAndamento') { Remove-TarefaOtimizacao -Nome $script:TarefaFluxo; return }
+    if ($estado.Status -ne 'EmAndamento') { Remove-TarefasFluxo; return }
     Write-RegistroFluxo -Pasta $Pasta -Texto "Retomando na etapa $([int]$estado.Indice + 1) como $env:USERDOMAIN\$env:USERNAME."
     try {
         while ([int]$estado.Indice -lt @($estado.Etapas).Count) {
             # Relê o estado: o menu pode ter cancelado o fluxo enquanto a etapa anterior rodava.
             $estado = Get-EstadoFluxo -Pasta $Pasta
-            if ($estado.Status -ne 'EmAndamento') { Write-RegistroFluxo -Pasta $Pasta -Texto "Fluxo $($estado.Status): parado."; Remove-TarefaOtimizacao -Nome $script:TarefaFluxo; return }
+            if ($estado.Status -ne 'EmAndamento') { Write-RegistroFluxo -Pasta $Pasta -Texto "Fluxo $($estado.Status): parado."; Remove-TarefasFluxo; return }
             $etapa = @($estado.Etapas)[[int]$estado.Indice]
             $etapa.Status = 'Executando'
             $etapa.Inicio = (Get-Date).ToString('s')
@@ -499,18 +605,7 @@ function Invoke-FluxoOtimizacao {
 
 #endregion
 
-#region Menu (interativo)
-
-function Read-Opcao {
-    param([string]$Pergunta)
-    Read-Host $Pergunta
-}
-
-function Invoke-ScriptConsole {
-    <# Executa um script num processo separado, com a saída direto na tela. #>
-    param([Parameter(Mandatory)][string]$Arquivo, [string[]]$Argumentos = @())
-    & $script:PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Arquivo @Argumentos
-}
+#region Menu (janelas)
 
 function Get-SessaoPendente {
     <# Script tem sessão de aplicação ainda não revertida (mesmo critério do -Revert). #>
@@ -519,13 +614,13 @@ function Get-SessaoPendente {
             Where-Object { $_.Name -like "*-$Script" -and -not (Test-Path -LiteralPath (Join-Path $_.FullName 'revertido.txt')) }).Count
 }
 
-function Invoke-Simulacao {
-    param([Parameter(Mandatory)][string]$Perfil, [Parameter(Mandatory)][string[]]$Scripts)
-    foreach ($s in $Scripts) {
-        Write-Host ''
-        Write-Host "===== Simulação: $s =====" -ForegroundColor Cyan
-        Invoke-ScriptConsole -Arquivo (Join-Path $PSScriptRoot "$s.ps1") -Argumentos @('-Perfil', $Perfil, '-WhatIf')
-    }
+function Get-PendenteReversao {
+    <# Scripts com sessão não revertida, na ordem da reversão (inversa à do fluxo). #>
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)][string]$Cliente, [string]$Raiz = $script:RaizFluxo)
+    $ordem = @($script:Scripts | ForEach-Object { $_.Nome })
+    [array]::Reverse($ordem)
+    @($ordem | Where-Object { Get-SessaoPendente -Cliente $Cliente -Script $_ -Raiz $Raiz })
 }
 
 function Resolve-UsuarioFluxo {
@@ -536,77 +631,28 @@ function Resolve-UsuarioFluxo {
     [pscustomobject]@{ Sid = $alvo.Sid; Nome = $nome; DoPerfil = [bool]$Perfil.UsuarioSid }
 }
 
-function Start-FluxoMenu {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Simula e pede confirmação (S/N) antes de alterar.')]
-    param([Parameter(Mandatory)][string]$CaminhoPerfil, [Parameter(Mandatory)]$Perfil)
-    $scripts = Get-ScriptAplicavel -Perfil $Perfil
-    if (-not $scripts.Count) { Write-Host 'Nenhum item que altere o sistema no perfil.' -ForegroundColor Yellow; return }
+function Get-CondicaoFluxo {
+    <# O que precisa estar certo antes de simular o fluxo: scripts aplicáveis, avisos e bloqueios da pré-checagem e o usuário alvo. Erro vazio = pode seguir. #>
+    param([Parameter(Mandatory)]$Perfil)
+    $r = [pscustomobject]@{ Scripts = @(Get-ScriptAplicavel -Perfil $Perfil); Avisos = @(); Bloqueios = @(); Usuario = $null; Erro = $null }
+    if (-not $r.Scripts.Count) { $r.Erro = 'Nenhum item que altere o sistema no perfil.'; return $r }
     $pre = Test-PreCondicao -PermitirReinicializacaoPendente
-    foreach ($a in $pre.Avisos) { Write-Host "Aviso: $a" -ForegroundColor Yellow }
-    if ($pre.Bloqueios.Count) {
-        foreach ($b in $pre.Bloqueios) { Write-Host "Bloqueio: $b" -ForegroundColor Red }
-        Write-Host 'Resolva os bloqueios e tente de novo. Nada foi alterado.' -ForegroundColor Red
-        return
-    }
-    try { $u = Resolve-UsuarioFluxo -Perfil $Perfil }
-    catch { Write-Host "Usuário alvo: $($_.Exception.Message) Preencha UsuarioSid no perfil." -ForegroundColor Red; return }
-
-    Invoke-Simulacao -Perfil $CaminhoPerfil -Scripts $scripts
-
-    Write-Host ''
-    Write-Host '===== Fluxo completo =====' -ForegroundColor Cyan
-    Write-Host "Cliente: $($Perfil.Cliente)   Usuário alvo: $($u.Nome)$(if (-not $u.DoPerfil) { ' (usuário conectado agora; UsuarioSid vazio no perfil)' })"
-    $n = 0
-    foreach ($e in Get-PlanoFluxo -Scripts $scripts) { $n++; Write-Host ('  {0,2}. {1}' -f $n, $e.Nome) }
-    Write-Host ''
-    Write-Host 'Durante o fluxo:'
-    Write-Host '  - Nas três coletas, entre com o usuário do cliente logo depois de reiniciar e deixe o PC parado até ele reiniciar sozinho.'
-    Write-Host '  - A otimização roda na tela de entrada, sem ninguém conectado. Não é preciso entrar.'
-    Write-Host '  - Com alguém conectado, o aviso de reinicialização aparece 60 segundos antes.'
-    Write-Host '  - A Proteção do Sistema precisa estar ligada no disco do sistema: cada script cria um ponto de restauração.'
-    Write-Host '  - Duração estimada: 1 h 30 a 2 h. No fim, o resultado abre no Bloco de Notas.'
-    Write-Host ''
-    if ((Read-Opcao 'Confirmar e iniciar o fluxo? Depois disto nada mais será perguntado (S/N)') -notmatch '^[sS]$') { Write-Host 'Cancelado. Nada foi alterado.'; return }
-
-    $pasta = Start-FluxoOtimizacao -PerfilOrigem $CaminhoPerfil -UsuarioSid $u.Sid
-    Write-Host "Fluxo iniciado. Pasta: $pasta" -ForegroundColor Green
-    Write-Host "O computador vai reiniciar em $($script:AvisoReinicioSegundos) segundos. Depois disso, siga as instruções acima." -ForegroundColor Green
-    Invoke-FluxoOtimizacao -Pasta $pasta
-}
-
-function Start-ReversaoMenu {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Simula e pede confirmação (S/N) antes de alterar.')]
-    param([Parameter(Mandatory)][string]$CaminhoPerfil, [Parameter(Mandatory)]$Perfil)
-    $ordem = @($script:Scripts | ForEach-Object { $_.Nome })
-    [array]::Reverse($ordem)
-    $pendentes = @($ordem | Where-Object { Get-SessaoPendente -Cliente $Perfil.Cliente -Script $_ })
-    if (-not $pendentes.Count) { Write-Host "Nada a reverter para o cliente $($Perfil.Cliente)."; return }
-    foreach ($s in $pendentes) {
-        Write-Host ''
-        Write-Host "===== Simulação da reversão: $s =====" -ForegroundColor Cyan
-        Invoke-ScriptConsole -Arquivo (Join-Path $PSScriptRoot "$s.ps1") -Argumentos @('-Perfil', $CaminhoPerfil, '-Revert', '-WhatIf')
-    }
-    Write-Host ''
-    if ((Read-Opcao "Reverter $($pendentes -join ', ') nesta ordem? (S/N)") -notmatch '^[sS]$') { Write-Host 'Cancelado. Nada foi alterado.'; return }
-    foreach ($s in $pendentes) {
-        Write-Host ''
-        Write-Host "===== Reversão: $s =====" -ForegroundColor Cyan
-        Invoke-ScriptConsole -Arquivo (Join-Path $PSScriptRoot "$s.ps1") -Argumentos @('-Perfil', $CaminhoPerfil, '-Revert')
-    }
-    Write-Host ''
-    Write-Host 'Reversão concluída. Reinicie o computador para que tudo volte a valer.' -ForegroundColor Green
+    $r.Avisos = @($pre.Avisos)
+    $r.Bloqueios = @($pre.Bloqueios)
+    if ($r.Bloqueios.Count) { $r.Erro = 'Resolva os bloqueios e tente de novo. Nada foi alterado.'; return $r }
+    try { $r.Usuario = Resolve-UsuarioFluxo -Perfil $Perfil }
+    catch { $r.Erro = "Usuário alvo: $($_.Exception.Message) Preencha UsuarioSid no perfil." }
+    $r
 }
 
 function Stop-FluxoMenu {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Pede confirmação (S/N) antes de cancelar.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Chamada só depois da confirmação na janela.')]
     param([Parameter(Mandatory)]$Fluxo)
-    if ((Read-Opcao 'Cancelar o fluxo em andamento? (S/N)') -notmatch '^[sS]$') { return }
     $Fluxo.Estado.Status = 'Cancelado'
     $Fluxo.Estado.Fim = (Get-Date).ToString('s')
     Save-EstadoFluxo -Pasta $Fluxo.Pasta -Estado $Fluxo.Estado
     Write-RegistroFluxo -Pasta $Fluxo.Pasta -Texto "Cancelado no menu por $env:USERDOMAIN\$env:USERNAME."
-    Remove-TarefaOtimizacao -Nome $script:TarefaFluxo
-    Write-Host 'Fluxo cancelado. Se uma etapa estiver em execução, ela termina e nada mais é executado. O que já foi aplicado continua; para desfazer, use Reverter.' -ForegroundColor Yellow
+    Remove-TarefasFluxo
 }
 
 function Get-PastaPerfil {
@@ -621,68 +667,575 @@ function Get-ArquivoPerfil {
         Where-Object { $_.Name -ne 'exemplo.psd1' } | Sort-Object -Property Name
 }
 
-function Select-PerfilMenu {
-    <# Lista os perfis e a opção Novo perfil; devolve o escolhido ou o criado (Caminho e Perfil), ou $null para sair. #>
-    while ($true) {
-        $arquivos = @(Get-ArquivoPerfil)
-        Write-Host ''
-        Write-Host 'Perfis de cliente:' -ForegroundColor Cyan
-        for ($i = 0; $i -lt $arquivos.Count; $i++) { Write-Host ('  {0}. {1}' -f ($i + 1), $arquivos[$i].Name) }
-        Write-Host '  N. Novo perfil'
-        Write-Host '  0. Sair'
-        $op = Read-Opcao 'Perfil'
-        if ($op -eq '0') { return $null }
-        if ($op -match '^[nN]$') {
-            $pasta = @(Get-PastaPerfil)[0]
-            if (-not (Test-Path -LiteralPath $pasta)) { New-Item -ItemType Directory -Path $pasta -Force | Out-Null; Set-AcessoRestrito -Pasta $pasta }
-            # Carregado só aqui: o fluxo no boot não precisa das funções de leitura do Novo perfil.
-            try {
-                . (Join-Path $PSScriptRoot 'Perfil.ps1')
-                $novo = New-PerfilInterativo -Pasta $pasta
-                if ($novo) { return [pscustomobject]@{ Caminho = $novo; Perfil = Import-PerfilCliente -Caminho $novo } }
-            }
-            catch { Write-Host "Novo perfil interrompido: $($_.Exception.Message)" -ForegroundColor Red }
-            continue
-        }
-        $n = 0
-        if ([int]::TryParse($op, [ref]$n) -and $n -ge 1 -and $n -le $arquivos.Count) {
-            try { return [pscustomobject]@{ Caminho = $arquivos[$n - 1].FullName; Perfil = Import-PerfilCliente -Caminho $arquivos[$n - 1].FullName } }
-            catch { Write-Host $_.Exception.Message -ForegroundColor Red }
+function Get-LinhaAcompanhamento {
+    <# Linhas da tabela de etapas: Numero, Nome, Status, Inicio e Fim (HH:mm:ss), Detalhe e Atual (etapa em execução). #>
+    param([Parameter(Mandatory)]$Estado)
+    $etapas = @($Estado.Etapas)
+    $hora = { param($v) if ($v) { ([datetime]$v).ToString('HH:mm:ss') } else { '' } }
+    for ($i = 0; $i -lt $etapas.Count; $i++) {
+        $e = $etapas[$i]
+        [pscustomobject]@{
+            Numero = $i + 1; Nome = $e.Nome; Status = $e.Status; Inicio = (& $hora $e.Inicio); Fim = (& $hora $e.Fim); Detalhe = [string]$e.Detalhe
+            Atual = ($Estado.Status -eq 'EmAndamento' -and $i -eq [int]$Estado.Indice)
         }
     }
 }
 
+function Get-CabecalhoAcompanhamento {
+    <# Textos do topo da janela de acompanhamento: Titulo, Info, Atual, Dica, Concluidas e Total. #>
+    param([Parameter(Mandatory)]$Estado)
+    $etapas = @($Estado.Etapas)
+    $atual = [int]$Estado.Indice
+    $nome = @{ Concluido = 'concluído'; Interrompido = 'interrompido'; Cancelado = 'cancelado' }
+    $r = [pscustomobject]@{
+        Titulo     = "Fluxo $(if ($nome.ContainsKey([string]$Estado.Status)) { $nome[[string]$Estado.Status] } else { $Estado.Status }): cliente $($Estado.Cliente)"
+        Info       = "Computador $($Estado.Computador), iniciado em $(([datetime]$Estado.Inicio).ToString('dd/MM/yyyy HH:mm')), reinicializações $($Estado.Reinicializacoes)."
+        Atual      = ''
+        Dica       = ''
+        Concluidas = @($etapas | Where-Object { $_.Status -eq 'OK' }).Count
+        Total      = $etapas.Count
+    }
+    if ($Estado.Status -eq 'EmAndamento' -and $atual -lt $etapas.Count) {
+        $r.Titulo = "Fluxo em andamento: cliente $($Estado.Cliente)"
+        $r.Atual = "Etapa $($atual + 1) de $($etapas.Count): $($etapas[$atual].Nome)."
+        $r.Dica = if ($etapas[$atual].Tipo -eq 'Coleta') {
+            "A coleta espera $($Estado.AguardarUptimeMinutos) min depois da inicialização e mede por $($Estado.AmostraSegundos) s. Deixe o computador parado até ele reiniciar sozinho."
+        }
+        else { 'A otimização roda sozinha. Não é preciso fazer nada; o computador reinicia quando precisar.' }
+    }
+    elseif ($Estado.Status -ne 'EmAndamento') {
+        $r.Atual = if ($Estado.Motivo) { "Motivo: $($Estado.Motivo)" } else { '' }
+        $r.Dica = if ($Estado.Status -in 'Concluido', 'Interrompido') { 'O resultado abre no Bloco de Notas e fica em mensagem.txt na pasta do fluxo.' } else { 'Nada mais será executado. O que já foi aplicado continua; para desfazer, use Reverter.' }
+    }
+    $r
+}
+
+function Get-FimLogFluxo {
+    param([Parameter(Mandatory)][string]$Pasta, [int]$Linhas = 6)
+    $log = Join-Path $Pasta 'fluxo.log'
+    if (-not (Test-Path -LiteralPath $log)) { return @() }
+    @([IO.File]::ReadAllLines($log, [Text.Encoding]::UTF8) | Select-Object -Last $Linhas)
+}
+
+function Join-ArgumentoProcesso {
+    <# Linha de comando do processo: argumento com espaço ou vazio entre aspas (caminhos não contêm aspas). #>
+    [OutputType([string])]
+    param([string[]]$Argumentos = @())
+    (@($Argumentos) | ForEach-Object { if ($_ -eq '' -or $_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+}
+
+function Get-CodificacaoConsole {
+    <#
+        Codificação da saída de um processo filho sem janela: ele ganha um console novo, que usa a página OEM do sistema
+        (850 num Windows pt-BR, 65001 com a opção UTF-8 ligada). A cultura do usuário não serve: no host ela dizia 850 com o sistema em 65001.
+    #>
+    if (-not ('Otimizacao.PaginaCodigo' -as [type])) {
+        Add-Type -Namespace Otimizacao -Name PaginaCodigo -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint GetOEMCP();'
+    }
+    $cp = [int][Otimizacao.PaginaCodigo]::GetOEMCP()
+    if ($cp -eq 65001) { New-Object Text.UTF8Encoding $false } else { [Text.Encoding]::GetEncoding($cp) }
+}
+
+function Start-ProcessoScript {
+    <# Inicia um .ps1 num PowerShell 5.1 separado, sem janela, com a saída e os erros lidos pela janela do Menu (Read-SaidaProcesso). #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Só inicia o processo; o que ele altera é decidido pelos argumentos escolhidos na janela.')]
+    param([Parameter(Mandatory)][string]$Arquivo, [string[]]$Argumentos = @())
+    $psi = New-Object Diagnostics.ProcessStartInfo $script:PowerShellExe
+    $psi.Arguments = Join-ArgumentoProcesso -Argumentos (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Arquivo) + $Argumentos)
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $psi.StandardErrorEncoding = Get-CodificacaoConsole
+    $p = [Diagnostics.Process]::Start($psi)
+    [pscustomobject]@{ Processo = $p; Leituras = @{ Saida = $p.StandardOutput.ReadLineAsync(); Erro = $p.StandardError.ReadLineAsync() } }
+}
+
+function Read-SaidaProcesso {
+    <# Linhas já disponíveis do processo, sem bloquear (chamada pelo temporizador da janela). Terminou = saída esgotada e processo encerrado. #>
+    param([Parameter(Mandatory)]$Execucao)
+    $linhas = New-Object System.Collections.Generic.List[string]
+    foreach ($k in 'Saida', 'Erro') {
+        $leitor = if ($k -eq 'Saida') { $Execucao.Processo.StandardOutput } else { $Execucao.Processo.StandardError }
+        while ($Execucao.Leituras[$k] -and $Execucao.Leituras[$k].IsCompleted) {
+            $l = if ($Execucao.Leituras[$k].IsFaulted) { $null } else { $Execucao.Leituras[$k].Result }
+            if ($null -eq $l) { $Execucao.Leituras[$k] = $null }
+            else { $linhas.Add($l); $Execucao.Leituras[$k] = $leitor.ReadLineAsync() }
+        }
+    }
+    $terminou = -not $Execucao.Leituras['Saida'] -and -not $Execucao.Leituras['Erro'] -and $Execucao.Processo.HasExited
+    [pscustomobject]@{ Linhas = $linhas.ToArray(); Terminou = $terminou; Codigo = $(if ($terminou) { $Execucao.Processo.ExitCode }) }
+}
+
+function Initialize-Interface {
+    <# WinForms, estilos visuais, DPI, cores e fontes. Só nas janelas: o fluxo no boot (SYSTEM, sem tela) não carrega nada disso. #>
+    if ($script:CorJanela) { return }
+    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+    if (-not ('Otimizacao.Dpi' -as [type])) { Add-Type -Namespace Otimizacao -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' }
+    [void][Otimizacao.Dpi]::SetProcessDPIAware()
+    [Windows.Forms.Application]::EnableVisualStyles()
+    $script:CorJanela = @{
+        Fundo = [Drawing.Color]::FromArgb(243, 243, 243); Branco = [Drawing.Color]::White; Topo = [Drawing.Color]::FromArgb(32, 32, 32)
+        Acento = [Drawing.Color]::FromArgb(0, 95, 184); Texto = [Drawing.Color]::Black; Texto2 = [Drawing.Color]::FromArgb(96, 96, 96)
+        Borda = [Drawing.Color]::FromArgb(210, 210, 210); OK = [Drawing.Color]::FromArgb(16, 124, 16); Execucao = [Drawing.Color]::FromArgb(157, 93, 0)
+        ExecucaoFundo = [Drawing.Color]::FromArgb(255, 244, 206); Falha = [Drawing.Color]::FromArgb(196, 43, 28); Pendente = [Drawing.Color]::FromArgb(130, 130, 130)
+        Console = [Drawing.Color]::FromArgb(30, 30, 30); ConsoleTexto = [Drawing.Color]::FromArgb(220, 220, 220)
+    }
+    $script:FonteJanela = @{
+        Normal = New-Object Drawing.Font('Segoe UI', 10); Negrito = New-Object Drawing.Font('Segoe UI Semibold', 10)
+        Titulo = New-Object Drawing.Font('Segoe UI Semibold', 15); Sub = New-Object Drawing.Font('Segoe UI Semibold', 12)
+        Mono = New-Object Drawing.Font('Consolas', 9.5); Pequena = New-Object Drawing.Font('Segoe UI', 8.5); Lista = New-Object Drawing.Font('Segoe UI', 11)
+    }
+}
+
+function Set-TamanhoJanela {
+    <# Tamanho e mínimo pedidos, limitados à área útil da tela: em 1024x768 (VM) o rodapé com os botões ficava fora. #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Só ajusta o tamanho da janela em memória.')]
+    param([Parameter(Mandatory)]$Janela, [int]$Largura, [int]$Altura, [int]$MinLargura = 0, [int]$MinAltura = 0)
+    $area = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $Janela.MinimumSize = New-Object Drawing.Size([Math]::Min($MinLargura, $area.Width), [Math]::Min($MinAltura, $area.Height))
+    $Janela.Size = New-Object Drawing.Size([Math]::Min($Largura, $area.Width), [Math]::Min($Altura, $area.Height))
+}
+
+function New-BotaoJanela {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Só cria o controle em memória.')]
+    param([Parameter(Mandatory)][string]$Texto, [switch]$Principal, [int]$Largura = 160)
+    $b = New-Object Windows.Forms.Button
+    $b.Text = $Texto; $b.Width = $Largura; $b.Height = 38; $b.Font = $script:FonteJanela.Normal
+    $b.FlatStyle = 'Flat'; $b.Margin = New-Object Windows.Forms.Padding(0, 0, 8, 0); $b.Cursor = 'Hand'
+    if ($Principal) { $b.BackColor = $script:CorJanela.Acento; $b.ForeColor = $script:CorJanela.Branco; $b.FlatAppearance.BorderSize = 0 }
+    else { $b.BackColor = $script:CorJanela.Branco; $b.FlatAppearance.BorderColor = $script:CorJanela.Borda }
+    $b
+}
+
+function New-RotuloJanela {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Só cria o controle em memória.')]
+    param([AllowEmptyString()][string]$Texto, $Fonte = $script:FonteJanela.Normal, $Cor = $script:CorJanela.Texto, [int]$Largura = 0)
+    $l = New-Object Windows.Forms.Label
+    $l.Text = $Texto; $l.Font = $Fonte; $l.ForeColor = $Cor; $l.AutoSize = $true
+    if ($Largura) { $l.MaximumSize = New-Object Drawing.Size($Largura, 0) }
+    $l.Margin = New-Object Windows.Forms.Padding(0, 4, 0, 4)
+    $l
+}
+
+function New-PilhaJanela {
+    <# Painel que empilha os controles de cima para baixo. #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Só cria o controle em memória.')]
+    param()
+    $p = New-Object Windows.Forms.FlowLayoutPanel
+    $p.FlowDirection = 'TopDown'; $p.WrapContents = $false; $p.AutoScroll = $true; $p.Dock = 'Fill'
+    $p
+}
+
+function Show-AvisoJanela {
+    param($Janela, [Parameter(Mandatory)][string]$Texto, [string]$Titulo = 'Otimização', [string]$Icone = 'Information')
+    [void][Windows.Forms.MessageBox]::Show($Janela, $Texto, $Titulo, 'OK', $Icone)
+}
+
+function Test-PerguntaJanela {
+    <# Sim ou Não, com Não como padrão. #>
+    param($Janela, [Parameter(Mandatory)][string]$Texto, [string]$Titulo = 'Otimização', [string]$Icone = 'Question')
+    [Windows.Forms.MessageBox]::Show($Janela, $Texto, $Titulo, 'YesNo', $Icone, 'Button2') -eq 'Yes'
+}
+
+function Invoke-AcaoJanela {
+    <# Executa a ação de um botão; erro inesperado vira mensagem na tela em vez de derrubar a janela. #>
+    param($Janela, [Parameter(Mandatory)][scriptblock]$Acao)
+    try { & $Acao }
+    catch { Show-AvisoJanela -Janela $Janela -Texto "Erro inesperado: $($_.Exception.Message)" -Icone Error }
+}
+
+function New-RodapeJanela {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Só cria o controle em memória.')]
+    param()
+    $r = New-Object Windows.Forms.FlowLayoutPanel; $r.Dock = 'Bottom'; $r.Height = 62; $r.FlowDirection = 'RightToLeft'
+    $r.Padding = New-Object Windows.Forms.Padding(20, 12, 12, 12); $r.BackColor = $script:CorJanela.Branco
+    $r
+}
+
+function Show-JanelaAcompanhamento {
+    <#
+        Etapas do fluxo com situação e horas, barra de progresso e fim do fluxo.log, relidos a cada IntervaloSegundos até o
+        fluxo terminar. Fechar a janela não afeta o fluxo. Com PermitirCancelar (janela elevada), o botão Cancelar fluxo
+        pede confirmação e cancela. Devolve $true se o fluxo foi cancelado nesta janela.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Pasta', Justification = 'Lido nos manipuladores de evento da janela.')]
+    param([Parameter(Mandatory)][string]$Pasta, [switch]$PermitirCancelar, [int]$IntervaloSegundos = 10)
+    $cor = $script:CorJanela
+    $fonte = $script:FonteJanela
+    $w = @{ Restante = $IntervaloSegundos; Cancelado = $false; Terminado = $false }
+
+    $f = New-Object Windows.Forms.Form
+    $f.Text = 'Otimização: acompanhamento do fluxo'; Set-TamanhoJanela -Janela $f -Largura 900 -Altura 760 -MinLargura 760 -MinAltura 560
+    $f.StartPosition = 'CenterScreen'; $f.Font = $fonte.Normal; $f.BackColor = $cor.Fundo
+
+    $corpo = New-Object Windows.Forms.Panel; $corpo.Dock = 'Fill'; $corpo.Padding = New-Object Windows.Forms.Padding(20, 12, 20, 8)
+    $lista = New-Object Windows.Forms.ListView
+    $lista.Name = 'Etapas'; $lista.View = 'Details'; $lista.FullRowSelect = $true; $lista.Dock = 'Fill'; $lista.HeaderStyle = 'Nonclickable'; $lista.BorderStyle = 'FixedSingle'
+    foreach ($c in @(@('#', 40), @('Etapa', 240), @('Situação', 130), @('Início', 80), @('Fim', 80), @('Detalhe', 300))) { [void]$lista.Columns.Add($c[0], $c[1]) }
+    $log = New-Object Windows.Forms.TextBox
+    $log.Multiline = $true; $log.ReadOnly = $true; $log.Dock = 'Bottom'; $log.Height = 130; $log.Font = $fonte.Mono
+    $log.BackColor = $cor.Console; $log.ForeColor = $cor.ConsoleTexto; $log.BorderStyle = 'None'
+    $rotLog = New-RotuloJanela -Texto 'Últimas linhas do registro' -Fonte $fonte.Negrito; $rotLog.Dock = 'Bottom'; $rotLog.Padding = New-Object Windows.Forms.Padding(0, 10, 0, 4)
+    $cab = New-PilhaJanela; $cab.Dock = 'Top'; $cab.Height = 160; $cab.AutoScroll = $false
+    $rotTitulo = New-RotuloJanela -Texto '' -Fonte $fonte.Sub
+    $rotInfo = New-RotuloJanela -Texto '' -Cor $cor.Texto2 -Largura 830
+    $barra = New-Object Windows.Forms.ProgressBar; $barra.Width = 830; $barra.Height = 12
+    $rotAtual = New-RotuloJanela -Texto '' -Fonte $fonte.Negrito -Cor $cor.Acento -Largura 830
+    $rotDica = New-RotuloJanela -Texto '' -Cor $cor.Execucao -Largura 830
+    $cab.Controls.AddRange(@($rotTitulo, $rotInfo, $barra, $rotAtual, $rotDica))
+    $corpo.Controls.Add($lista); $corpo.Controls.Add($log); $corpo.Controls.Add($rotLog); $corpo.Controls.Add($cab)
+
+    $rodape = New-RodapeJanela
+    $bFechar = New-BotaoJanela -Texto 'Fechar janela' -Largura 140
+    $bCancelar = New-BotaoJanela -Texto 'Cancelar fluxo' -Largura 150; $bCancelar.ForeColor = $cor.Falha; $bCancelar.Visible = [bool]$PermitirCancelar
+    $bAtualizar = New-BotaoJanela -Texto 'Atualizar' -Principal -Largura 120
+    $rotTempo = New-RotuloJanela -Texto '' -Cor $cor.Texto2; $rotTempo.Margin = New-Object Windows.Forms.Padding(0, 9, 16, 0)
+    $rodape.Controls.AddRange(@($bFechar, $bCancelar, $bAtualizar, $rotTempo))
+    $f.Controls.Add($corpo); $f.Controls.Add($rodape)
+
+    $situacao = @{ OK = 'Concluída'; Executando = 'Executando'; Pendente = 'Pendente'; Falha = 'Falha' }
+    $corStatus = @{ OK = $cor.OK; Executando = $cor.Execucao; Pendente = $cor.Pendente; Falha = $cor.Falha }
+    $desenhar = {
+        try { $estado = Get-EstadoFluxo -Pasta $Pasta }
+        catch { $rotTempo.Text = "Lendo o estado do fluxo de novo: $($_.Exception.Message)"; return }
+        $c = Get-CabecalhoAcompanhamento -Estado $estado
+        $rotTitulo.Text = $c.Titulo; $rotInfo.Text = $c.Info; $rotAtual.Text = $c.Atual; $rotDica.Text = $c.Dica
+        $barra.Maximum = [Math]::Max(1, $c.Total); $barra.Value = [Math]::Min($c.Concluidas, $barra.Maximum)
+        $lista.BeginUpdate(); $lista.Items.Clear()
+        foreach ($l in Get-LinhaAcompanhamento -Estado $estado) {
+            $it = New-Object Windows.Forms.ListViewItem([string]$l.Numero)
+            foreach ($v in @($l.Nome, $(if ($situacao.ContainsKey($l.Status)) { $situacao[$l.Status] } else { $l.Status }), $l.Inicio, $l.Fim, $l.Detalhe)) { [void]$it.SubItems.Add([string]$v) }
+            if ($corStatus.ContainsKey($l.Status)) { $it.ForeColor = $corStatus[$l.Status] }
+            if ($l.Atual) { $it.BackColor = $cor.ExecucaoFundo; $it.Font = $fonte.Negrito }
+            [void]$lista.Items.Add($it)
+        }
+        $lista.EndUpdate()
+        $log.Text = (Get-FimLogFluxo -Pasta $Pasta) -join "`r`n"
+        if ($estado.Status -ne 'EmAndamento') { $w.Terminado = $true; $bCancelar.Visible = $false; $bAtualizar.Visible = $false; $rotTempo.Text = 'Fluxo encerrado.' }
+        else { $rotTempo.Text = "Atualiza em $($w.Restante) s" }
+    }
+    $relogio = New-Object Windows.Forms.Timer; $relogio.Interval = 1000
+    $relogio.Add_Tick({
+            if ($w.Terminado) { $relogio.Stop(); return }
+            $w.Restante--
+            if ($w.Restante -le 0) { $w.Restante = $IntervaloSegundos; & $desenhar }
+            elseif (-not $w.Terminado) { $rotTempo.Text = "Atualiza em $($w.Restante) s" }
+        })
+    $bAtualizar.Add_Click({ $w.Restante = $IntervaloSegundos; & $desenhar })
+    $bFechar.Add_Click({ $f.Close() })
+    $bCancelar.Add_Click({
+            Invoke-AcaoJanela -Janela $f -Acao {
+                $texto = "Cancelar o fluxo em andamento?`r`n`r`nSe uma etapa estiver em execução, ela termina e nada mais é executado. O que já foi aplicado continua; para desfazer, use Reverter."
+                if (-not (Test-PerguntaJanela -Janela $f -Texto $texto -Titulo 'Cancelar fluxo' -Icone Warning)) { return }
+                Stop-FluxoMenu -Fluxo ([pscustomobject]@{ Pasta = $Pasta; Estado = (Get-EstadoFluxo -Pasta $Pasta) })
+                $w.Cancelado = $true
+                & $desenhar
+            }
+        })
+    $f.Add_FormClosed({ $relogio.Stop() })
+    & $desenhar
+    $relogio.Start()
+    $f.Tag = $w
+    [void]$f.ShowDialog()
+    $f.Dispose()
+    $w.Cancelado
+}
+
+function Show-JanelaConfirmacaoFluxo {
+    <# Etapas do fluxo, usuário alvo, resultado da simulação e instruções; devolve $true só com Iniciar fluxo. #>
+    param([Parameter(Mandatory)]$Perfil, [Parameter(Mandatory)]$Condicao, [object[]]$Simulacao = @(), $Dono)
+    $cor = $script:CorJanela
+    $fonte = $script:FonteJanela
+    $f = New-Object Windows.Forms.Form
+    $f.Text = 'Fluxo completo'; Set-TamanhoJanela -Janela $f -Largura 780 -Altura 780; $f.StartPosition = 'CenterParent'; $f.Font = $fonte.Normal
+    $f.BackColor = $cor.Fundo; $f.MinimizeBox = $false; $f.MaximizeBox = $false; $f.FormBorderStyle = 'FixedDialog'; $f.ShowInTaskbar = $false
+
+    $pilha = New-PilhaJanela; $pilha.Padding = New-Object Windows.Forms.Padding(20, 16, 20, 8)
+    $u = $Condicao.Usuario
+    $pilha.Controls.Add((New-RotuloJanela -Texto "Fluxo completo: $($Perfil.Cliente)" -Fonte $fonte.Sub))
+    $pilha.Controls.Add((New-RotuloJanela -Texto "Usuário alvo: $($u.Nome)$(if (-not $u.DoPerfil) { ' (usuário conectado agora; UsuarioSid vazio no perfil)' })" -Cor $cor.Texto2 -Largura 710))
+    $falhas = @($Simulacao | Where-Object { $_.Codigo })
+    if ($falhas.Count) {
+        $pilha.Controls.Add((New-RotuloJanela -Texto ('Atenção: a simulação terminou com erro em ' + (($falhas | ForEach-Object { "$($_.Titulo) (código $($_.Codigo))" }) -join ', ') + '. Confira a saída antes de iniciar.') -Fonte $fonte.Negrito -Cor $cor.Falha -Largura 710))
+    }
+    else { $pilha.Controls.Add((New-RotuloJanela -Texto "Simulação de $($Condicao.Scripts -join ', ') concluída sem erro (a saída está na janela principal)." -Cor $cor.OK -Largura 710)) }
+    foreach ($a in $Condicao.Avisos) { $pilha.Controls.Add((New-RotuloJanela -Texto "Aviso: $a" -Cor $cor.Execucao -Largura 710)) }
+    $pilha.Controls.Add((New-RotuloJanela -Texto 'Etapas' -Fonte $fonte.Negrito))
+    $etapas = New-Object Windows.Forms.ListBox; $etapas.Width = 710; $etapas.Height = 230; $etapas.BorderStyle = 'FixedSingle'; $etapas.SelectionMode = 'None'
+    $n = 0; foreach ($e in Get-PlanoFluxo -Scripts $Condicao.Scripts) { $n++; [void]$etapas.Items.Add(('{0,2}.  {1}' -f $n, $e.Nome)) }
+    $pilha.Controls.Add($etapas)
+    $pilha.Controls.Add((New-RotuloJanela -Texto 'Durante o fluxo' -Fonte $fonte.Negrito))
+    foreach ($t in @(
+            'Nas três coletas, entre com o usuário do cliente logo depois de reiniciar e deixe o PC parado até ele reiniciar sozinho.'
+            'A otimização roda na tela de entrada, sem ninguém conectado. Não é preciso entrar.'
+            'Ao entrar com o usuário alvo depois de cada reinicialização, abre uma janela com as etapas e o andamento.'
+            'Com alguém conectado, o aviso de reinicialização aparece 60 segundos antes.'
+            'A Proteção do Sistema precisa estar ligada no disco do sistema: cada script cria um ponto de restauração.'
+            'Duração estimada: 1 h 30 a 2 h. No fim, o resultado abre no Bloco de Notas.')) {
+        $pilha.Controls.Add((New-RotuloJanela -Texto "•  $t" -Largura 710))
+    }
+    $alerta = New-RotuloJanela -Texto "Depois de confirmar, nada mais será perguntado. O computador reinicia em $($script:AvisoReinicioSegundos) segundos." -Fonte $fonte.Negrito -Cor $cor.Execucao -Largura 710
+    $alerta.Margin = New-Object Windows.Forms.Padding(0, 12, 0, 0)
+    $pilha.Controls.Add($alerta)
+
+    $rodape = New-RodapeJanela
+    $bIniciar = New-BotaoJanela -Texto 'Iniciar fluxo' -Principal; $bIniciar.DialogResult = 'OK'
+    $bCancelar = New-BotaoJanela -Texto 'Cancelar'; $bCancelar.DialogResult = 'Cancel'
+    $rodape.Controls.AddRange(@($bIniciar, $bCancelar))
+    $f.CancelButton = $bCancelar
+    $f.Controls.Add($pilha); $f.Controls.Add($rodape)
+    $ok = $f.ShowDialog($Dono) -eq 'OK'
+    $f.Dispose()
+    $ok
+}
+
+function Show-JanelaMenu {
+    <#
+        Janela principal: perfis à esquerda (e Novo perfil); à direita os itens do perfil, as ações e a saída dos scripts.
+        Simular, Só verificar e Reverter rodam os scripts em processo separado, um por vez, com a saída na janela.
+        Devolve $true se um fluxo completo foi iniciado.
+    #>
+    $cor = $script:CorJanela
+    $fonte = $script:FonteJanela
+    $catalogo = @(Get-CatalogoPerfil)
+    $ui = @{ Arquivos = @(); Escolha = $null; Fila = New-Object System.Collections.Queue; Atual = $null; AtualTitulo = $null; Resultados = $null; AoTerminar = $null; FluxoIniciado = $false }
+
+    $f = New-Object Windows.Forms.Form
+    $f.Text = 'Otimização'; Set-TamanhoJanela -Janela $f -Largura 1200 -Altura 800 -MinLargura 980 -MinAltura 640
+    $f.StartPosition = 'CenterScreen'; $f.Font = $fonte.Normal; $f.BackColor = $cor.Fundo
+
+    $topo = New-Object Windows.Forms.Panel; $topo.Dock = 'Top'; $topo.Height = 56; $topo.BackColor = $cor.Topo
+    $tit = New-RotuloJanela -Texto 'Otimização de PCs' -Fonte $fonte.Titulo -Cor $cor.Branco; $tit.Location = [Drawing.Point]::new(18, 12)
+    $maq = New-Object Windows.Forms.Label; $maq.Dock = 'Right'; $maq.Width = 560; $maq.TextAlign = 'MiddleRight'; $maq.Padding = New-Object Windows.Forms.Padding(0, 0, 18, 0)
+    $maq.ForeColor = $cor.Borda
+    $versao = try { $so = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop; "$($so.Caption -replace '^Microsoft ', '') $($so.BuildNumber)" } catch { '' }
+    $maq.Text = "$env:COMPUTERNAME   ·   Administrador   ·   $versao"
+    $topo.Controls.Add($tit); $topo.Controls.Add($maq)
+
+    $esq = New-Object Windows.Forms.Panel; $esq.Dock = 'Left'; $esq.Width = 290; $esq.BackColor = $cor.Branco; $esq.Padding = New-Object Windows.Forms.Padding(16)
+    $lstPerfis = New-Object Windows.Forms.ListBox; $lstPerfis.Name = 'Perfis'; $lstPerfis.Dock = 'Fill'; $lstPerfis.BorderStyle = 'None'; $lstPerfis.IntegralHeight = $false; $lstPerfis.Font = $fonte.Lista
+    $rotPerfis = New-RotuloJanela -Texto 'Perfis de cliente' -Fonte $fonte.Sub; $rotPerfis.Dock = 'Top'; $rotPerfis.Padding = New-Object Windows.Forms.Padding(0, 0, 0, 8)
+    $bNovo = New-BotaoJanela -Texto '+  Novo perfil' -Largura 250; $bNovo.Dock = 'Bottom'
+    $esq.Controls.Add($lstPerfis); $esq.Controls.Add($rotPerfis); $esq.Controls.Add($bNovo)
+
+    $dir = New-Object Windows.Forms.Panel; $dir.Dock = 'Fill'; $dir.Padding = New-Object Windows.Forms.Padding(20, 16, 20, 16)
+    $cab = New-PilhaJanela; $cab.Dock = 'Top'; $cab.Height = 70; $cab.AutoScroll = $false
+    $rotCliente = New-RotuloJanela -Texto 'Escolha um perfil à esquerda' -Fonte $fonte.Sub
+    $rotUsuario = New-RotuloJanela -Texto '' -Cor $cor.Texto2
+    $cab.Controls.AddRange(@($rotCliente, $rotUsuario))
+    $acoes = New-Object Windows.Forms.FlowLayoutPanel; $acoes.Dock = 'Top'; $acoes.Height = 54; $acoes.Padding = New-Object Windows.Forms.Padding(0, 4, 0, 8)
+    $bFluxo = New-BotaoJanela -Texto 'Fluxo completo' -Principal
+    $bSimular = New-BotaoJanela -Texto 'Simular'
+    $bVerificar = New-BotaoJanela -Texto 'Só verificar agora'
+    $bReverter = New-BotaoJanela -Texto 'Reverter'
+    $acoes.Controls.AddRange(@($bFluxo, $bSimular, $bVerificar, $bReverter))
+    $dica = New-Object Windows.Forms.ToolTip
+    $dica.SetToolTip($bFluxo, 'Coletas, otimização, reinicializações e verificação, sozinho (1 h 30 a 2 h). Simula antes e pede uma confirmação.')
+    $dica.SetToolTip($bSimular, 'Mostra o que cada script mudaria. Nada é alterado.')
+    $dica.SetToolTip($bVerificar, 'Compara o perfil com o estado real da máquina. Só leitura.')
+    $dica.SetToolTip($bReverter, 'Desfaz o que foi aplicado para este cliente, na ordem inversa. Simula e pede confirmação antes.')
+    $itens = New-Object Windows.Forms.ListView
+    $itens.View = 'Details'; $itens.Dock = 'Fill'; $itens.FullRowSelect = $true; $itens.BorderStyle = 'FixedSingle'; $itens.HeaderStyle = 'Nonclickable'
+    foreach ($c in @(@('Item', 70), @('Ajuste aprovado', 740))) { [void]$itens.Columns.Add($c[0], $c[1]) }
+    foreach ($s in @($catalogo | ForEach-Object { $_.Script } | Select-Object -Unique)) { [void]$itens.Groups.Add($s, $s) }
+    $saidaPainel = New-Object Windows.Forms.Panel; $saidaPainel.Dock = 'Bottom'; $saidaPainel.Height = 240; $saidaPainel.Padding = New-Object Windows.Forms.Padding(0, 12, 0, 0)
+    $saida = New-Object Windows.Forms.TextBox; $saida.Name = 'Saida'; $saida.Multiline = $true; $saida.ReadOnly = $true; $saida.ScrollBars = 'Both'; $saida.WordWrap = $false; $saida.Dock = 'Fill'
+    $saida.Font = $fonte.Mono; $saida.BackColor = $cor.Console; $saida.ForeColor = $cor.ConsoleTexto; $saida.BorderStyle = 'None'; $saida.MaxLength = 0
+    $rotSaida = New-RotuloJanela -Texto 'Saída' -Fonte $fonte.Negrito; $rotSaida.Dock = 'Top'
+    $saidaPainel.Controls.Add($saida); $saidaPainel.Controls.Add($rotSaida)
+    $dir.Controls.Add($itens); $dir.Controls.Add($saidaPainel); $dir.Controls.Add($acoes); $dir.Controls.Add($cab)
+    $f.Controls.Add($dir); $f.Controls.Add($esq); $f.Controls.Add($topo)
+
+    $escrever = { param([string[]]$Linhas) foreach ($l in $Linhas) { $saida.AppendText("$l`r`n") } }
+    $habilitar = {
+        $livre = -not $ui.Atual -and -not $ui.Fila.Count -and -not $ui.AoTerminar
+        $lstPerfis.Enabled = $livre; $bNovo.Enabled = $livre
+        foreach ($b in @($bFluxo, $bSimular, $bVerificar, $bReverter)) { $b.Enabled = $livre -and [bool]$ui.Escolha }
+        $rotSaida.Text = if ($livre) { 'Saída' } else { "Saída  (executando: $($ui.AtualTitulo))" }
+    }
+    $carregarPerfis = {
+        param([string]$Selecionar)
+        $ui.Arquivos = @(Get-ArquivoPerfil)
+        $lstPerfis.Items.Clear()
+        foreach ($a in $ui.Arquivos) { [void]$lstPerfis.Items.Add([IO.Path]::GetFileNameWithoutExtension($a.Name)) }
+        if ($Selecionar) { $lstPerfis.SelectedIndex = [array]::IndexOf(@($ui.Arquivos | ForEach-Object { $_.FullName }), $Selecionar) }
+    }
+    # Fila de scripts: um por vez, a saída vai para a janela; AoTerminar roda quando a fila esvazia.
+    $iniciarFila = {
+        param([object[]]$Itens, [scriptblock]$AoTerminar)
+        foreach ($i in $Itens) { $ui.Fila.Enqueue($i) }
+        $ui.Resultados = New-Object System.Collections.Generic.List[object]
+        $ui.AoTerminar = $AoTerminar
+        & $habilitar
+        $relogio.Start()
+    }
+    $relogio = New-Object Windows.Forms.Timer; $relogio.Interval = 200
+    $relogio.Add_Tick({
+            try {
+                if ($ui.Atual) {
+                    $r = Read-SaidaProcesso -Execucao $ui.Atual
+                    & $escrever $r.Linhas
+                    if (-not $r.Terminou) { return }
+                    if ($r.Codigo) { & $escrever "($($ui.AtualTitulo) terminou com código $($r.Codigo).)" }
+                    $ui.Resultados.Add([pscustomobject]@{ Titulo = $ui.AtualTitulo; Codigo = $r.Codigo })
+                    $ui.Atual.Processo.Dispose()
+                    $ui.Atual = $null
+                }
+                if ($ui.Fila.Count) {
+                    $j = $ui.Fila.Dequeue()
+                    $ui.AtualTitulo = $j.Titulo
+                    & $escrever @('', "===== $($j.Titulo) =====")
+                    $ui.Atual = Start-ProcessoScript -Arquivo $j.Arquivo -Argumentos $j.Argumentos
+                    & $habilitar
+                    return
+                }
+                $relogio.Stop()
+                $fim = $ui.AoTerminar
+                $ui.AoTerminar = $null
+                & $habilitar
+                if ($fim) { Invoke-AcaoJanela -Janela $f -Acao $fim }
+            }
+            catch {
+                $relogio.Stop(); $ui.Fila.Clear(); $ui.Atual = $null; $ui.AoTerminar = $null
+                & $escrever "Erro ao executar: $($_.Exception.Message)"
+                & $habilitar
+            }
+        })
+    $itemScript = {
+        param([string]$Titulo, [string]$Script, [string[]]$Argumentos)
+        [pscustomobject]@{ Titulo = $Titulo; Arquivo = (Join-Path $PSScriptRoot "$Script.ps1"); Argumentos = $Argumentos }
+    }
+
+    $lstPerfis.Add_SelectedIndexChanged({
+            $ui.Escolha = $null
+            $itens.Items.Clear()
+            if ($lstPerfis.SelectedIndex -lt 0) { & $habilitar; return }
+            $a = $ui.Arquivos[$lstPerfis.SelectedIndex]
+            try { $p = Import-PerfilCliente -Caminho $a.FullName }
+            catch { $rotCliente.Text = $a.Name; $rotUsuario.Text = "Perfil inválido: $($_.Exception.Message)"; & $habilitar; return }
+            $ui.Escolha = [pscustomobject]@{ Caminho = $a.FullName; Perfil = $p }
+            $aplicar = @($p.Aplicar | Where-Object { $p.Pular -notcontains $_ })
+            $usuario = if ($p.UsuarioSid) { try { ([Security.Principal.SecurityIdentifier]$p.UsuarioSid).Translate([Security.Principal.NTAccount]).Value } catch { $p.UsuarioSid } } else { 'usuário conectado no momento do fluxo' }
+            $rotCliente.Text = $p.Cliente
+            $rotUsuario.Text = "Usuário alvo: $usuario    ·    $($aplicar.Count) itens    ·    $($a.Name)"
+            $itens.BeginUpdate()
+            foreach ($id in $aplicar) {
+                $i = $catalogo | Where-Object Id -EQ $id
+                $grupo = if ($i) { $itens.Groups[$i.Script] } else { $null }
+                $it = New-Object Windows.Forms.ListViewItem([string]$id, $grupo)
+                [void]$it.SubItems.Add($(if ($i) { $i.Texto } else { '(item fora do catálogo)' }))
+                [void]$itens.Items.Add($it)
+            }
+            $itens.EndUpdate()
+            & $habilitar
+        })
+
+    $bNovo.Add_Click({
+            Invoke-AcaoJanela -Janela $f -Acao {
+                $pasta = @(Get-PastaPerfil)[0]
+                if (-not (Test-Path -LiteralPath $pasta)) { New-Item -ItemType Directory -Path $pasta -Force | Out-Null; Set-AcessoRestrito -Pasta $pasta }
+                $novo = Show-JanelaNovoPerfil -Pasta $pasta
+                & $carregarPerfis $novo
+                if ($novo) { & $escrever "Perfil gravado: $novo" }
+            }
+        })
+
+    $bSimular.Add_Click({
+            Invoke-AcaoJanela -Janela $f -Acao {
+                $e = $ui.Escolha
+                $scripts = @(Get-ScriptAplicavel -Perfil $e.Perfil)
+                $saida.Clear()
+                if (-not $scripts.Count) { & $escrever 'Nenhum item que altere o sistema no perfil.'; return }
+                & $iniciarFila @($scripts | ForEach-Object { & $itemScript "Simulação: $_" $_ @('-Perfil', $e.Caminho, '-WhatIf') }) { & $escrever @('', 'Simulação concluída. Nada foi alterado.') }
+            }
+        })
+
+    $bVerificar.Add_Click({
+            Invoke-AcaoJanela -Janela $f -Acao {
+                $saida.Clear()
+                & $iniciarFila @(& $itemScript 'Verificação' 'Verificacao' @('-Perfil', $ui.Escolha.Caminho)) { }
+            }
+        })
+
+    $bReverter.Add_Click({
+            Invoke-AcaoJanela -Janela $f -Acao {
+                $e = $ui.Escolha
+                $pendentes = @(Get-PendenteReversao -Cliente $e.Perfil.Cliente)
+                $saida.Clear()
+                if (-not $pendentes.Count) { & $escrever "Nada a reverter para o cliente $($e.Perfil.Cliente)."; return }
+                $ui.Pendentes = $pendentes
+                & $iniciarFila @($pendentes | ForEach-Object { & $itemScript "Simulação da reversão: $_" $_ @('-Perfil', $e.Caminho, '-Revert', '-WhatIf') }) {
+                    $texto = "Reverter $($ui.Pendentes -join ', ') nesta ordem?`r`n`r`nA simulação da reversão está na saída."
+                    if (-not (Test-PerguntaJanela -Janela $f -Texto $texto -Titulo 'Reverter')) { & $escrever @('', 'Cancelado. Nada foi alterado.'); return }
+                    & $iniciarFila @($ui.Pendentes | ForEach-Object { & $itemScript "Reversão: $_" $_ @('-Perfil', $ui.Escolha.Caminho, '-Revert') }) {
+                        & $escrever @('', 'Reversão concluída. Reinicie o computador para que tudo volte a valer.')
+                        Show-AvisoJanela -Janela $f -Texto 'Reversão concluída. Reinicie o computador para que tudo volte a valer.' -Titulo 'Reverter'
+                    }
+                }
+            }
+        })
+
+    $bFluxo.Add_Click({
+            Invoke-AcaoJanela -Janela $f -Acao {
+                $e = $ui.Escolha
+                $saida.Clear()
+                $c = Get-CondicaoFluxo -Perfil $e.Perfil
+                & $escrever @($c.Avisos | ForEach-Object { "Aviso: $_" })
+                & $escrever @($c.Bloqueios | ForEach-Object { "Bloqueio: $_" })
+                if ($c.Erro) { & $escrever $c.Erro; Show-AvisoJanela -Janela $f -Texto $c.Erro -Titulo 'Fluxo completo' -Icone Warning; return }
+                $ui.Condicao = $c
+                & $iniciarFila @($c.Scripts | ForEach-Object { & $itemScript "Simulação: $_" $_ @('-Perfil', $e.Caminho, '-WhatIf') }) {
+                    if (-not (Show-JanelaConfirmacaoFluxo -Perfil $ui.Escolha.Perfil -Condicao $ui.Condicao -Simulacao $ui.Resultados.ToArray() -Dono $f)) {
+                        & $escrever @('', 'Fluxo cancelado. Nada foi alterado.'); return
+                    }
+                    $pasta = Start-FluxoOtimizacao -PerfilOrigem $ui.Escolha.Caminho -UsuarioSid $ui.Condicao.Usuario.Sid
+                    & $escrever "Fluxo iniciado. Pasta: $pasta"
+                    Invoke-FluxoOtimizacao -Pasta $pasta
+                    $ui.FluxoIniciado = $true
+                    Show-AvisoJanela -Janela $f -Texto "Fluxo iniciado. O computador vai reiniciar em $($script:AvisoReinicioSegundos) segundos. Depois disso, siga as instruções da confirmação." -Titulo 'Fluxo completo'
+                    $f.Close()
+                }
+            }
+        })
+
+    $f.Add_FormClosing({
+            if (($ui.Atual -or $ui.Fila.Count) -and -not $ui.FluxoIniciado) {
+                Show-AvisoJanela -Janela $f -Texto "Aguarde terminar: $($ui.AtualTitulo)." -Titulo 'Otimização'
+                $_.Cancel = $true
+            }
+        })
+    $f.Add_FormClosed({ $relogio.Stop() })
+
+    & $carregarPerfis
+    & $habilitar
+    $f.Tag = $ui
+    [void]$f.ShowDialog()
+    $f.Dispose()
+    $ui.FluxoIniciado
+}
+
 function Show-MenuPrincipal {
     if (-not (Test-Administrador)) { throw 'Execute o Menu como administrador (botão direito no PowerShell, Executar como administrador).' }
+    Initialize-Interface
+    # Carregado só aqui: o fluxo no boot não precisa do catálogo nem das funções de leitura do Novo perfil.
+    . (Join-Path $PSScriptRoot 'Perfil.ps1')
     while ($true) {
         $andamento = @(Get-FluxoEmAndamento)
         if ($andamento.Count) {
-            $f = $andamento[0]
-            $etapas = @($f.Estado.Etapas)
-            Write-Host ''
-            Write-Host "Fluxo em andamento: cliente $($f.Estado.Cliente), etapa $([int]$f.Estado.Indice + 1) de $($etapas.Count) ($($etapas[[int]$f.Estado.Indice].Nome))." -ForegroundColor Yellow
-            Write-Host "Pasta: $($f.Pasta)"
-            Write-Host '  5. Cancelar o fluxo em andamento'
-            Write-Host '  0. Sair'
-            switch (Read-Opcao 'Opção') { '5' { Stop-FluxoMenu -Fluxo $f } '0' { return } }
+            # Com fluxo em andamento, a janela de acompanhamento é o menu; cancelado, volta aos perfis.
+            if (-not (Show-JanelaAcompanhamento -Pasta $andamento[0].Pasta -PermitirCancelar)) { return }
             continue
         }
-        $escolha = Select-PerfilMenu
-        if (-not $escolha) { return }
-        Write-Host ''
-        Write-Host "Cliente: $($escolha.Perfil.Cliente)   Itens: $(@($escolha.Perfil.Aplicar | Where-Object { $escolha.Perfil.Pular -notcontains $_ }) -join ', ')" -ForegroundColor Cyan
-        Write-Host '  1. Simular (nada é alterado)'
-        Write-Host '  2. Fluxo completo (coletas, otimização, reinicializações e verificação, sozinho)'
-        Write-Host '  3. Só verificar agora'
-        Write-Host '  4. Reverter'
-        Write-Host '  0. Voltar'
-        switch (Read-Opcao 'Opção') {
-            '1' { Invoke-Simulacao -Perfil $escolha.Caminho -Scripts (Get-ScriptAplicavel -Perfil $escolha.Perfil) }
-            '2' { Start-FluxoMenu -CaminhoPerfil $escolha.Caminho -Perfil $escolha.Perfil; if (@(Get-FluxoEmAndamento).Count) { return } }
-            '3' { Invoke-ScriptConsole -Arquivo (Join-Path $PSScriptRoot 'Verificacao.ps1') -Argumentos @('-Perfil', $escolha.Caminho) }
-            '4' { Start-ReversaoMenu -CaminhoPerfil $escolha.Caminho -Perfil $escolha.Perfil }
-        }
+        if (-not (Show-JanelaMenu)) { return }
     }
+}
+
+function Invoke-Acompanhar {
+    <# Janela aberta pela tarefa no logon do usuário alvo. Cancelar o fluxo só aparece se ela estiver elevada. #>
+    param([Parameter(Mandatory)][string]$Pasta)
+    Initialize-Interface
+    [void](Show-JanelaAcompanhamento -Pasta $Pasta -PermitirCancelar:(Test-Administrador))
 }
 
 #endregion
@@ -690,5 +1243,6 @@ function Show-MenuPrincipal {
 # Permite carregar as funções com dot-source (testes) sem executar.
 if ($MyInvocation.InvocationName -ne '.') {
     if ($Continuar) { Invoke-FluxoOtimizacao -Pasta $Continuar }
+    elseif ($Acompanhar) { Invoke-Acompanhar -Pasta $Acompanhar }
     else { Show-MenuPrincipal }
 }

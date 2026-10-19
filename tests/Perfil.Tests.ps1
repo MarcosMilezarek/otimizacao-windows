@@ -35,35 +35,77 @@ Describe 'Get-CatalogoPerfil' {
     It 'L4 a L7 e A1 trazem aviso de aprovação' {
         foreach ($id in 'L4', 'L5', 'L6', 'L7', 'A1') { ($script:Cat | Where-Object Id -EQ $id).Aviso | Should -Not -BeNullOrEmpty }
     }
+
+    It 'Só os itens da Manutencao têm quando usar, o que corrige e fonte' {
+        @($script:Cat | Where-Object { $_.Quando -and $_.Corrige -and $_.Fonte } | ForEach-Object { $_.Id }) -join ',' | Should -Be 'M1,M2,M3,M4,M8'
+        @($script:Cat | Where-Object { $_.Script -ne 'Manutencao' -and ($_.Quando -or $_.Corrige -or $_.Fonte) }).Count | Should -Be 0
+    }
 }
 
-Describe 'ConvertFrom-Selecao' {
-    It 'Aceita IDs sem diferenciar maiúsculas, números, vírgulas e faixas' {
-        (ConvertFrom-Selecao -Texto 'l1, 3 5-6' -Validos 'L1', 'L2', 'L3', 'L4', 'L5', 'L6') -join ',' | Should -Be 'L1,L3,L5,L6'
+Describe 'Pré-seleção e validações do Novo perfil' {
+    It 'Pré-seleciona todos, menos a Manutencao, o A3, o I3 e o I9' {
+        $fora = @(Get-CatalogoPerfil | Where-Object { -not (Test-PreSelecionado -Item $_) } | ForEach-Object { $_.Id })
+        $fora -join ',' | Should -Be 'M1,M2,M3,M4,M8,A3,I3,I9'
     }
 
-    It 'Devolve na ordem dos válidos e sem repetição' {
-        (ConvertFrom-Selecao -Texto 'L3 1 l3' -Validos 'L1', 'L2', 'L3') -join ',' | Should -Be 'L1,L3'
+    It 'Nome do cliente: letras, números, ponto, hífen e sublinhado, até 60' {
+        Test-NomeCliente 'Cliente_1.a-b' | Should -BeTrue
+        Test-NomeCliente 'a b' | Should -BeFalse
+        Test-NomeCliente '' | Should -BeFalse
+        Test-NomeCliente ('x' * 61) | Should -BeFalse
     }
 
-    It 'Número fora da faixa lança ArgumentException com o token' {
-        { ConvertFrom-Selecao -Texto '7' -Validos 'L1', 'L2' } | Should -Throw -ExceptionType ([ArgumentException]) -ExpectedMessage "*'7'*"
+    It 'Horário do M8: 0 a 23 e intervalo de 1 a 18 h, inclusive passando da meia-noite' {
+        Test-HorarioM8 -Inicio 8 -Fim 17 | Should -BeTrue
+        Test-HorarioM8 -Inicio 22 -Fim 6 | Should -BeTrue
+        Test-HorarioM8 -Inicio 7 -Fim 7 | Should -BeFalse
+        Test-HorarioM8 -Inicio 0 -Fim 19 | Should -BeFalse
+        Test-HorarioM8 -Inicio 8 -Fim 24 | Should -BeFalse
+    }
+}
+
+Describe 'New-DadosPerfil' {
+    It 'Itens na ordem do catálogo, sem o informativo A3' {
+        $r = New-DadosPerfil -Cliente 'C' -Marcados 'L1', 'A3', 'M8', 'A4' -Opcoes @{ M8Inicio = 7; M8Fim = 19 }
+        $r.Dados.Aplicar -join ',' | Should -Be 'M8,A4,L1'
+        $r.Dados.Opcoes.M8Inicio | Should -Be 7
+        $r.Dados.UsuarioSid | Should -Be ''
     }
 
-    It 'ID desconhecido lança' {
-        { ConvertFrom-Selecao -Texto 'X9' -Validos 'L1' } | Should -Throw -ExceptionType ([ArgumentException])
+    It 'Item de lista sem escolha sai de Aplicar e vai para Desmarcados' {
+        $r = New-DadosPerfil -Cliente 'C' -Marcados 'I1', 'I2', 'I10' -Escolhas @{ I1 = @('X Agent'); I10 = @{} }
+        $r.Dados.Aplicar -join ',' | Should -Be 'I1,I2'
+        $r.Desmarcados -join ',' | Should -Be 'I10'
+        @($r.Dados.Opcoes.I1Desabilitar) -join '|' | Should -Be 'X Agent'
     }
 
-    It 'Número enorme lança ArgumentException em vez de estourar' {
-        { ConvertFrom-Selecao -Texto '99999999999' -Validos 'L1' } | Should -Throw -ExceptionType ([ArgumentException])
+    It 'I10 guarda a tabela serviço = Manual ou Disabled; A2 guarda os Ids' {
+        $r = New-DadosPerfil -Cliente 'C' -Marcados 'I10', 'A2' -Escolhas @{ I10 = @{ 'Svc X' = 'Disabled' }; A2 = @('AD2F1837.HPPrinterControl') }
+        $r.Dados.Opcoes.I10Servicos['Svc X'] | Should -Be 'Disabled'
+        @($r.Dados.Opcoes.A2Remover) -join '|' | Should -Be 'AD2F1837.HPPrinterControl'
     }
 
-    It 'Faixa enorme lança ArgumentException sem montar a lista' {
-        { ConvertFrom-Selecao -Texto '1-2000000000' -Validos 'L1', 'L2' } | Should -Throw -ExceptionType ([ArgumentException])
+    It 'Opções só dos itens marcados' {
+        $r = New-DadosPerfil -Cliente 'C' -Marcados 'M1', 'L1' -Opcoes @{ M1Reparar = $true; M2Reparar = $true; V5DesligarInicializacaoRapida = $true }
+        $r.Dados.Opcoes.ContainsKey('M1Reparar') | Should -BeTrue
+        $r.Dados.Opcoes.ContainsKey('M2Reparar') | Should -BeFalse
+        $r.Dados.Opcoes.ContainsKey('V5DesligarInicializacaoRapida') | Should -BeFalse
     }
 
-    It 'Texto vazio devolve lista vazia' {
-        @(ConvertFrom-Selecao -Texto '' -Validos 'L1').Count | Should -Be 0
+    It 'Usuário escolhido vai para UsuarioSid e o resultado grava e relê' {
+        $r = New-DadosPerfil -Cliente 'ClienteB' -UsuarioSid 'S-1-5-21-1-2-3-1001' -Marcados 'M3'
+        $arq = Save-PerfilGerado -Dados $r.Dados -Pasta (Join-Path $TestDrive ([guid]::NewGuid()))
+        $p = Import-PerfilCliente -Caminho $arq
+        $p.UsuarioSid | Should -Be 'S-1-5-21-1-2-3-1001'
+        $p.Aplicar -join ',' | Should -Be 'M3'
+    }
+
+    It 'Resumo mostra o nome do programa escolhido no A2, as opções e os desmarcados' {
+        $r = New-DadosPerfil -Cliente 'K' -Marcados 'A2', 'I1', 'M8' -Escolhas @{ A2 = @('AD2F1837.HPPrinterControl') } -Opcoes @{ M8Inicio = 8; M8Fim = 17 }
+        $texto = (Get-ResumoPerfil -Dados $r.Dados -Usuario 'PC\cliente' -Rotulos @{ A2 = @('HP Smart 1  [HP Inc., Appx]') } -Desmarcados $r.Desmarcados) -join "`n"
+        $texto | Should -Match '-> HP Smart'
+        $texto | Should -Match 'M8Inicio = 8'
+        $texto | Should -Match 'Desmarcados por nada escolhido na lista: I1'
     }
 }
 
@@ -171,149 +213,148 @@ Describe 'Listas da máquina' {
     }
 }
 
-Describe 'New-PerfilInterativo' {
+# Janelas reais (WinForms) conduzidas por um temporizador na mesma thread: ele dispara dentro do laço da janela modal,
+# preenche os campos e clica nos botões. Só leitura do sistema (listas por Mock); o perfil é gravado em TestDrive.
+# Pulados fora de sessão interativa (PowerShell Direct na VM): o WinForms recusa ShowDialog sem UserInteractive.
+Describe 'Janelas do Novo perfil e do Menu' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '..\src\Menu.ps1')
+        Initialize-Interface
+
+        function Get-ControleJanela {
+            param($Raiz, [scriptblock]$Filtro)
+            foreach ($c in $Raiz.Controls) { if (& $Filtro $c) { $c }; Get-ControleJanela -Raiz $c -Filtro $Filtro }
+        }
+
+        function Invoke-ComTemporizador {
+            <# Executa a janela aberta por Abrir; a cada tique chama o passo seguinte com a janela do Titulo. Fecha tudo se passar do limite. #>
+            # Estado em $script: com nomes do teste: o tique roda dentro da janela, e por escopo dinâmico um nome local
+            # (como $passos ou $f) acharia a variável da janela.
+            param([string]$Titulo, [scriptblock[]]$Passos, [scriptblock]$Abrir)
+            $script:TesteTitulo = $Titulo
+            $script:TestePassos = $Passos
+            $script:Indice = 0
+            $script:Tiques = 0
+            $script:Falha = $null
+            $script:TesteRelogio = New-Object Windows.Forms.Timer; $script:TesteRelogio.Interval = 300
+            $script:TesteRelogio.Add_Tick({
+                    $script:Tiques++
+                    $janela = @([Windows.Forms.Application]::OpenForms | Where-Object { $_.Text -eq $script:TesteTitulo })[0]
+                    if ($script:Tiques -gt 60) { $script:TesteRelogio.Stop(); foreach ($x in @([Windows.Forms.Application]::OpenForms)) { $x.Dispose() }; return }
+                    if (-not $janela -or $script:Indice -ge $script:TestePassos.Count) { return }
+                    try { & $script:TestePassos[$script:Indice] $janela } catch { $script:Falha = $_.Exception.Message; $script:TesteRelogio.Stop(); $janela.Dispose(); return }
+                    $script:Indice++
+                })
+            $script:TesteRelogio.Start()
+            try { & $Abrir } finally { $script:TesteRelogio.Stop(); $script:TesteRelogio.Dispose() }
+        }
+
+        function Invoke-Botao {
+            param($Janela, [string]$Texto)
+            @(Get-ControleJanela -Raiz $Janela -Filtro { param($c) $c -is [Windows.Forms.Button] -and $c.Text -eq $Texto })[0].PerformClick()
+        }
+    }
+
     BeforeEach {
         $script:Pasta = Join-Path $TestDrive ([guid]::NewGuid())
-        Mock Write-Host { }
         Mock Get-UsuarioLocal { [pscustomobject]@{ Sid = 'S-1-5-21-1-2-3-1001'; Nome = 'PC\cliente'; Perfil = 'C:\Users\cliente' } }
         Mock Get-UsuarioAlvo { [pscustomobject]@{ Sid = 'S-1-5-21-1-2-3-1001'; Perfil = 'C:\Users\cliente' } }
         Mock Get-CandidatoI1 { [pscustomobject]@{ Nome = 'X Agent'; Origem = 'Maquina\Run'; Comando = 'x.exe' }, [pscustomobject]@{ Nome = 'Y'; Origem = 'Usuario\Run'; Comando = 'y.exe' } }
-        Mock Get-CandidatoI10 { }
-        function Set-Respostas([string[]]$Lista) {
-            $script:Fila = New-Object System.Collections.Queue
-            foreach ($r in $Lista) { $script:Fila.Enqueue($r) }
-        }
-        Mock Read-EntradaPerfil { if (-not $script:Fila.Count) { throw 'Fila de respostas vazia.' }; $script:Fila.Dequeue() }
+        Mock Get-CandidatoI4 { }
+        Mock Get-CandidatoI10 { [pscustomobject]@{ Nome = 'Svc X'; Exibicao = 'Serviço X'; Inicio = 'Automático' } }
+        Mock Get-CandidatoA2 { throw 'leitura falhou' }
     }
 
-    # Ordem das perguntas: cliente, usuário, Manutencao, Aplicativos, Inicializacao, VisualEnergia, Limpeza, listas, opções, confirmação.
-    It 'Fluxo completo grava o perfil com os itens, a lista e o horário escolhidos' {
-        Set-Respostas 'ClienteA', '1', 'M8', '', 'I1', '', '', '1', '7', '19', 'S'
-        $arq = New-PerfilInterativo -Pasta $script:Pasta
-        $arq | Should -Be (Join-Path $script:Pasta 'ClienteA.psd1')
-        $p = Import-PerfilCliente -Caminho $arq
-        $p.Aplicar -join ',' | Should -Be 'M8,I1'
-        $p.UsuarioSid | Should -Be ''
+    It 'Novo perfil: pré-seleção, listas, horário do M8 e gravação' -Skip:(-not [Environment]::UserInteractive) {
+        $script:Visto = @{}
+        $passos = @(
+            { param($f) @(Get-ControleJanela $f { param($c) $c.Name -eq 'Cliente' })[0].Text = 'ClienteGui'; Invoke-Botao $f 'Avançar' }
+            {
+                param($f)
+                $cat = @(Get-ControleJanela $f { param($c) $c.Name -eq 'Catalogo' })[0]
+                $script:Visto.PreMarcados = @($cat.CheckedItems | ForEach-Object { $_.Text })
+                # Marca o M8 e tenta marcar o A3 (informativo, não deve ficar marcado).
+                foreach ($it in $cat.Items) { if ($it.Text -in 'M8', 'A3') { $it.Checked = $true } }
+                $script:Visto.A3 = ($cat.Items | Where-Object Text -EQ 'A3').Checked
+                Invoke-Botao $f 'Avançar'
+            }
+            {
+                param($f)
+                $w = $f.Tag
+                $script:Visto.Abas = @($w.Abas.Keys | Sort-Object)
+                $w.Abas['I1'].Grade.Rows[0].Cells[0].Value = $true
+                $g10 = $w.Abas['I10'].Grade
+                $g10.Rows[0].Cells[0].Value = $true
+                $g10.Rows[0].Cells[2].Value = 'Desativado'
+                $script:Visto.SemGradeA2 = -not $w.Abas['A2'].Grade
+                Invoke-Botao $f 'Avançar'
+            }
+            {
+                param($f)
+                @(Get-ControleJanela $f { param($c) $c.Name -eq 'M8Inicio' })[0].Value = 7
+                @(Get-ControleJanela $f { param($c) $c.Name -eq 'M8Fim' })[0].Value = 19
+                Invoke-Botao $f 'Avançar'
+            }
+            { param($f) $script:Visto.Resumo = @(Get-ControleJanela $f { param($c) $c.Name -eq 'Resumo' })[0].Text; Invoke-Botao $f 'Gravar perfil' }
+        )
+        $script:Arquivo = $null
+        Invoke-ComTemporizador -Titulo 'Novo perfil' -Passos $passos -Abrir { $script:Arquivo = Show-JanelaNovoPerfil -Pasta $script:Pasta }
+        $script:Falha | Should -BeNullOrEmpty
+        $script:Visto.PreMarcados -join ',' | Should -Be (@(Get-CatalogoPerfil | Where-Object { Test-PreSelecionado -Item $_ } | ForEach-Object { $_.Id }) -join ',')
+        $script:Visto.A3 | Should -BeFalse
+        $script:Visto.Abas -join ',' | Should -Be 'A2,I1,I10,I4'
+        $script:Visto.SemGradeA2 | Should -BeTrue
+        $script:Visto.Resumo | Should -Match 'Desmarcados por nada escolhido na lista: A2, I4'
+        $script:Arquivo | Should -Be (Join-Path $script:Pasta 'ClienteGui.psd1')
+        $p = Import-PerfilCliente -Caminho $script:Arquivo
+        $p.Aplicar -contains 'M8' | Should -BeTrue
+        foreach ($id in 'A2', 'A3', 'I3', 'I4', 'I9', 'M1') { $p.Aplicar -contains $id | Should -BeFalse }
         @($p.Opcoes.I1Desabilitar) -join '|' | Should -Be 'X Agent'
+        $p.Opcoes.I10Servicos['Svc X'] | Should -Be 'Disabled'
         $p.Opcoes.M8Inicio | Should -Be 7
         $p.Opcoes.M8Fim | Should -Be 19
-        $script:Fila.Count | Should -Be 0
+        $p.Opcoes.V5DesligarInicializacaoRapida | Should -BeFalse
+        $p.UsuarioSid | Should -Be ''
     }
 
-    It 'Usuário escolhido na lista vai para UsuarioSid' {
-        Set-Respostas 'ClienteB', '2', 'M3', '', '', '', '', 'S'
-        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).UsuarioSid | Should -Be 'S-1-5-21-1-2-3-1001'
+    It 'Novo perfil: nome inválido não avança e nada é gravado' -Skip:(-not [Environment]::UserInteractive) {
+        $script:Visto = @{}
+        $passos = @(
+            { param($f) @(Get-ControleJanela $f { param($c) $c.Name -eq 'Cliente' })[0].Text = 'a b'; Invoke-Botao $f 'Avançar' }
+            { param($f) $script:Visto.Passo = $f.Tag.Passo; $f.DialogResult = 'OK' }
+        )
+        Invoke-ComTemporizador -Titulo 'Novo perfil' -Passos $passos -Abrir { $script:Arquivo = Show-JanelaNovoPerfil -Pasta $script:Pasta }
+        $script:Visto.Passo | Should -Be 0
+        $script:Arquivo | Should -BeNullOrEmpty
+        Test-Path -LiteralPath $script:Pasta | Should -BeFalse
     }
 
-    It 'A3 marcado não entra em Aplicar' {
-        Set-Respostas 'ClienteC', '1', '', 'A3 A4', '', '', '', 'S'
-        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'A4'
-    }
-
-    It 'Item de lista sem nada na máquina é desmarcado' {
-        Set-Respostas 'ClienteD', '1', '', '', 'I10 I2', '', '', 'S'
-        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'I2'
-    }
-
-    It 'Serviço do I10 recebe Manual ou Disabled' {
-        Mock Get-CandidatoI10 { [pscustomobject]@{ Nome = 'Svc X'; Exibicao = 'Serviço X'; Inicio = 'Automático' } }
-        Set-Respostas 'ClienteE', '1', '', '', 'I10', '', '', '1', 'D', 'S'
-        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Opcoes.I10Servicos['Svc X'] | Should -Be 'Disabled'
-    }
-
-    It 'Resumo mostra o nome do programa escolhido no A2, não só o Id' {
-        Mock Get-CandidatoA2 { [pscustomobject]@{ Nome = 'HP Smart'; Fabricante = 'HP Inc.'; Versao = '1'; Tipo = 'Appx'; Id = 'AD2F1837.HPPrinterControl' } }
-        Set-Respostas 'ClienteK', '1', '', 'A2', '', '', '', '1', 'S'
-        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Opcoes.A2Remover -join '|' | Should -Be 'AD2F1837.HPPrinterControl'
-        Should -Invoke Write-Host -ParameterFilter { "$Object" -like '*-> HP Smart*' }
-    }
-
-    It 'Resposta 0 cancela sem gravar' {
-        Set-Respostas 'ClienteF', '1', 'M3', '0'
-        New-PerfilInterativo -Pasta $script:Pasta | Should -BeNullOrEmpty
-        Test-Path -LiteralPath (Join-Path $script:Pasta 'ClienteF.psd1') | Should -BeFalse
-    }
-
-    It 'Seleção inválida pergunta de novo' {
-        Set-Respostas 'ClienteG', '1', 'Z9', 'M3', '', '', '', '', 'S'
-        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'M3'
-    }
-
-    It 'Horário do M8 com intervalo inválido pergunta de novo' {
-        Set-Respostas 'ClienteH', '1', 'M8', '', '', '', '', '7', '7', '8', '20', 'S'
-        $p = Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)
-        $p.Opcoes.M8Inicio | Should -Be 8
-        $p.Opcoes.M8Fim | Should -Be 20
-    }
-
-    It 'Confirmação N não grava' {
-        Set-Respostas 'ClienteI', '1', 'M3', '', '', '', '', 'N'
-        New-PerfilInterativo -Pasta $script:Pasta | Should -BeNullOrEmpty
-        Test-Path -LiteralPath (Join-Path $script:Pasta 'ClienteI.psd1') | Should -BeFalse
-    }
-
-    It 'Nenhum item marcado não grava' {
-        Set-Respostas 'ClienteJ', '1', '', '', '', '', ''
-        New-PerfilInterativo -Pasta $script:Pasta | Should -BeNullOrEmpty
-        $script:Fila.Count | Should -Be 0
-    }
-
-    It 'Nome inválido e perfil existente perguntam de novo; sobrescrever exige S' {
-        New-Item -ItemType Directory -Path $script:Pasta | Out-Null
-        Set-Content -LiteralPath (Join-Path $script:Pasta 'Existe.psd1') -Value "@{ Cliente = 'Existe' }"
-        Set-Respostas 'a b', 'Existe', 'N', 'Existe', 'S', '1', 'M3', '', '', '', '', 'S'
-        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'M3'
-    }
-}
-
-Describe 'Menu: escolha e criação de perfil' {
-    BeforeAll { . (Join-Path $PSScriptRoot '..\src\Menu.ps1') }
-    BeforeEach {
-        $script:Gerados = Join-Path $TestDrive ([guid]::NewGuid())
-        $script:Projeto = Join-Path $TestDrive ([guid]::NewGuid())
-        New-Item -ItemType Directory -Path $script:Gerados, $script:Projeto | Out-Null
-        Mock Get-PastaPerfil { $script:Gerados, $script:Projeto }
-        Mock Write-Host { }
-        Mock Set-AcessoRestrito { }
-    }
-
-    It 'Lista perfis gerados e do projeto, sem o exemplo, por nome' {
-        foreach ($a in (Join-Path $script:Projeto 'exemplo.psd1'), (Join-Path $script:Projeto 'B.psd1'), (Join-Path $script:Gerados 'A.psd1')) { Set-Content -LiteralPath $a -Value '@{}' }
-        (@(Get-ArquivoPerfil) | ForEach-Object { $_.Name }) -join ',' | Should -Be 'A.psd1,B.psd1'
-    }
-
-    It 'N cria o perfil e o devolve como escolhido' {
-        $novo = Join-Path $script:Gerados 'Novo.psd1'
-        Set-Content -LiteralPath $novo -Value "@{ Cliente = 'Novo'; Aplicar = @('L1') }"
-        Mock Read-Opcao { 'N' }
-        Mock New-PerfilInterativo { $novo }
-        $r = Select-PerfilMenu
-        $r.Caminho | Should -Be $novo
-        $r.Perfil.Cliente | Should -Be 'Novo'
-        Should -Invoke New-PerfilInterativo -Times 1 -Exactly -ParameterFilter { $Pasta -eq $script:Gerados }
-    }
-
-    It 'Sem perfis mostra o menu e 0 sai sem erro' {
-        Mock Read-Opcao { '0' }
-        Select-PerfilMenu | Should -BeNullOrEmpty
-    }
-
-    It 'Erro inesperado no Novo perfil volta à lista sem derrubar o Menu' {
-        $script:Respostas = New-Object System.Collections.Queue
-        'N', '0' | ForEach-Object { $script:Respostas.Enqueue($_) }
-        Mock Read-Opcao { $script:Respostas.Dequeue() }
-        Mock New-PerfilInterativo { throw 'falha inesperada' }
-        { Select-PerfilMenu } | Should -Not -Throw
-        Should -Invoke New-PerfilInterativo -Times 1 -Exactly
-    }
-
-    It 'Novo perfil cancelado volta à lista' {
-        $script:Respostas = New-Object System.Collections.Queue
-        'N', '0' | ForEach-Object { $script:Respostas.Enqueue($_) }
-        Mock Read-Opcao { $script:Respostas.Dequeue() }
-        Mock New-PerfilInterativo { $null }
-        Select-PerfilMenu | Should -BeNullOrEmpty
-        Should -Invoke New-PerfilInterativo -Times 1 -Exactly
+    It 'Menu: lista os perfis e mostra os itens do escolhido, sem executar nada' -Skip:(-not [Environment]::UserInteractive) {
+        $gerados = Join-Path $TestDrive ([guid]::NewGuid()); $projeto = Join-Path $TestDrive ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path $gerados, $projeto | Out-Null
+        [IO.File]::WriteAllText((Join-Path $gerados 'A.psd1'), "@{ Cliente = 'A'; UsuarioSid = ''; Aplicar = @('M3', 'L1', 'V2'); Pular = @('V2') }", (New-Object Text.UTF8Encoding $true))
+        [IO.File]::WriteAllText((Join-Path $projeto 'exemplo.psd1'), "@{ Cliente = 'E' }", (New-Object Text.UTF8Encoding $true))
+        Mock Get-PastaPerfil { $gerados, $projeto }
+        Mock Start-ProcessoScript { throw 'não deveria executar' }
+        $script:Visto = @{}
+        $passos = @(
+            {
+                param($f)
+                $lst = @(Get-ControleJanela $f { param($c) $c.Name -eq 'Perfis' })[0]
+                $script:Visto.Perfis = @($lst.Items)
+                $lst.SelectedIndex = 0
+                $script:Visto.Itens = @(@(Get-ControleJanela $f { param($c) $c -is [Windows.Forms.ListView] })[0].Items | ForEach-Object { $_.Text })
+                $script:Visto.Simular = @(Get-ControleJanela $f { param($c) $c -is [Windows.Forms.Button] -and $c.Text -eq 'Simular' })[0].Enabled
+                $f.Close()
+            }
+        )
+        Invoke-ComTemporizador -Titulo 'Otimização' -Passos $passos -Abrir { $script:Iniciou = Show-JanelaMenu }
+        $script:Falha | Should -BeNullOrEmpty
+        $script:Visto.Perfis -join ',' | Should -Be 'A'
+        $script:Visto.Itens -join ',' | Should -Be 'M3,L1'
+        $script:Visto.Simular | Should -BeTrue
+        $script:Iniciou | Should -BeFalse
+        Should -Invoke Start-ProcessoScript -Times 0
     }
 }
 

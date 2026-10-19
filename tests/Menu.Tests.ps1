@@ -111,12 +111,11 @@ Describe 'Sem prompt depois da escolha (análise estática)' {
             if (-not $vistos.Add($f)) { continue }
             foreach ($c in @($script:Chamadas[$f])) { if ($script:Chamadas.ContainsKey($c)) { $fila.Enqueue($c) } elseif ($c) { [void]$vistos.Add($c) } }
         }
-        @($vistos | Where-Object { $_ -in 'Read-Host', 'Read-Opcao', 'Get-Credential', 'Out-GridView', 'pause' -or $_ -like '*Menu*' }) | Should -BeNullOrEmpty
+        @($vistos | Where-Object { $_ -in 'Read-Host', 'Get-Credential', 'Out-GridView', 'pause', 'Initialize-Interface' -or $_ -like '*Menu*' -or $_ -like '*Janela*' }) | Should -BeNullOrEmpty
     }
 
-    It 'Read-Host só dentro de Read-Opcao' {
-        @($script:TodosComandos | Where-Object { $_ -eq 'Read-Host' }).Count | Should -Be 1
-        $script:Chamadas['Read-Opcao'] | Should -Contain 'Read-Host'
+    It 'Sem Read-Host: o menu é janela' {
+        @($script:TodosComandos | Where-Object { $_ -eq 'Read-Host' }).Count | Should -Be 0
     }
 
     It 'Não usa travessão' {
@@ -254,6 +253,181 @@ Describe 'Espera de logon' {
     }
 }
 
+Describe 'Usuário conectado por sessão (console, Área de Trabalho Remota, AnyDesk)' {
+    It 'Sessão remota ativa conta, mesmo com o console sem usuário' {
+        Mock Get-SessaoInterativa { [pscustomobject]@{ Id = 2; Estado = 0; Usuario = 'PC\marco' } }
+        Get-UsuarioConectado | Should -Be 'PC\marco'
+    }
+
+    It 'Sessão desconectada e sessão 0 não contam; com duas ativas vale a de menor Id' {
+        Mock Get-SessaoInterativa {
+            [pscustomobject]@{ Id = 0; Estado = 0; Usuario = 'NT AUTHORITY\SYSTEM' }
+            [pscustomobject]@{ Id = 1; Estado = 4; Usuario = 'PC\antigo' }
+            [pscustomobject]@{ Id = 5; Estado = 0; Usuario = 'PC\segundo' }
+            [pscustomobject]@{ Id = 3; Estado = 0; Usuario = 'PC\primeiro' }
+        }
+        Get-UsuarioConectado | Should -Be 'PC\primeiro'
+    }
+
+    It 'Sem sessão com usuário devolve vazio e Wait-Logon espera' {
+        Mock Get-SessaoInterativa { }
+        Get-UsuarioConectado | Should -Be ''
+        $pasta = New-FluxoTeste
+        $e = Get-EstadoFluxo -Pasta $pasta; $e.Status = 'Cancelado'; Save-EstadoFluxo -Pasta $pasta -Estado $e
+        Wait-Logon -Pasta $pasta -IntervaloSegundos 1 | Should -Be $false
+    }
+
+    It 'API WTS real: devolve objetos com Id, Estado e Usuario e não inclui a sessão 0 sem usuário' {
+        $s = @(Get-SessaoInterativa)
+        foreach ($x in $s) { $x.PSObject.Properties.Name | Should -Be @('Id', 'Estado', 'Usuario') }
+        @($s | Where-Object { -not $_.Usuario }) | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Acompanhamento do fluxo' {
+    BeforeEach {
+        $script:Pasta = New-FluxoTeste -Scripts @('Manutencao')
+        $e = Get-EstadoFluxo -Pasta $script:Pasta
+        $e.Indice = 1
+        $e.Etapas[0].Status = 'OK'; $e.Etapas[0].Inicio = '2026-10-19T10:54:47'; $e.Etapas[0].Fim = '2026-10-19T10:54:48'
+        $e.Etapas[1].Status = 'Executando'; $e.Etapas[1].Inicio = '2026-10-19T10:55:33'
+        Save-EstadoFluxo -Pasta $script:Pasta -Estado $e
+        Write-RegistroFluxo -Pasta $script:Pasta -Texto 'linha de teste um'
+        Write-RegistroFluxo -Pasta $script:Pasta -Texto 'linha de teste dois'
+    }
+
+    It 'Linhas: status e horas de cada etapa e a etapa atual marcada, sem alterar o estado' {
+        $antes = [IO.File]::ReadAllText((Join-Path $script:Pasta 'fluxo.json'), [Text.Encoding]::UTF8)
+        $l = @(Get-LinhaAcompanhamento -Estado (Get-EstadoFluxo -Pasta $script:Pasta))
+        $l.Count | Should -Be 10
+        $l[0].Status | Should -Be 'OK'; $l[0].Inicio | Should -Be '10:54:47'; $l[0].Fim | Should -Be '10:54:48'
+        $l[1].Nome | Should -Be 'Coleta antes 1'; $l[1].Status | Should -Be 'Executando'; $l[1].Atual | Should -BeTrue
+        @($l | Where-Object Atual).Count | Should -Be 1
+        [IO.File]::ReadAllText((Join-Path $script:Pasta 'fluxo.json'), [Text.Encoding]::UTF8) | Should -Be $antes
+    }
+
+    It 'Cabeçalho: etapa atual, dica da coleta e contagem; fim do log' {
+        $c = Get-CabecalhoAcompanhamento -Estado (Get-EstadoFluxo -Pasta $script:Pasta)
+        $c.Atual | Should -Be 'Etapa 2 de 10: Coleta antes 1.'
+        $c.Dica | Should -Match 'espera 10 min'
+        $c.Concluidas | Should -Be 1
+        $c.Total | Should -Be 10
+        (Get-FimLogFluxo -Pasta $script:Pasta) -join "`n" | Should -Match 'linha de teste dois'
+    }
+
+    It 'Fluxo terminado: sem etapa atual, com o motivo' {
+        $e = Get-EstadoFluxo -Pasta $script:Pasta; $e.Status = 'Interrompido'; $e.Motivo = 'motivo teste'; Save-EstadoFluxo -Pasta $script:Pasta -Estado $e
+        $e = Get-EstadoFluxo -Pasta $script:Pasta
+        @(Get-LinhaAcompanhamento -Estado $e | Where-Object Atual).Count | Should -Be 0
+        $c = Get-CabecalhoAcompanhamento -Estado $e
+        $c.Titulo | Should -Match 'Fluxo interrompido'
+        $c.Atual | Should -Be 'Motivo: motivo teste'
+    }
+
+    It 'Cancelar: grava Cancelado, registra no log e remove as tarefas' {
+        Mock Remove-TarefasFluxo { }
+        Stop-FluxoMenu -Fluxo ([pscustomobject]@{ Pasta = $script:Pasta; Estado = (Get-EstadoFluxo -Pasta $script:Pasta) })
+        (Get-EstadoFluxo -Pasta $script:Pasta).Status | Should -Be 'Cancelado'
+        [IO.File]::ReadAllText((Join-Path $script:Pasta 'fluxo.log'), [Text.Encoding]::UTF8) | Should -Match 'Cancelado no menu'
+        Should -Invoke Remove-TarefasFluxo -Times 1 -Exactly
+    }
+
+    It 'Menu com fluxo em andamento abre o acompanhamento; cancelado, volta aos perfis' {
+        Mock Test-Administrador { $true }
+        Mock Initialize-Interface { }
+        $script:NAndamento = 0
+        Mock Get-FluxoEmAndamento { $script:NAndamento++; if ($script:NAndamento -eq 1) { [pscustomobject]@{ Pasta = $script:Pasta; Estado = $null } } }
+        Mock Show-JanelaAcompanhamento { $true }
+        Mock Show-JanelaMenu { $false }
+        Show-MenuPrincipal
+        Should -Invoke Show-JanelaAcompanhamento -Times 1 -Exactly -ParameterFilter { $Pasta -eq $script:Pasta -and $PermitirCancelar }
+        Should -Invoke Show-JanelaMenu -Times 1 -Exactly
+    }
+
+    It 'Menu com fluxo em andamento: fechar o acompanhamento sem cancelar sai do menu' {
+        Mock Test-Administrador { $true }
+        Mock Initialize-Interface { }
+        Mock Get-FluxoEmAndamento { [pscustomobject]@{ Pasta = $script:Pasta; Estado = $null } }
+        Mock Show-JanelaAcompanhamento { $false }
+        Mock Show-JanelaMenu { $false }
+        Show-MenuPrincipal
+        Should -Invoke Show-JanelaMenu -Times 0
+    }
+
+    It 'Janela da tarefa: Cancelar fluxo só para quem está elevado' {
+        Mock Initialize-Interface { }
+        Mock Show-JanelaAcompanhamento { $false }
+        Mock Test-Administrador { $false }
+        Invoke-Acompanhar -Pasta $script:Pasta
+        Should -Invoke Show-JanelaAcompanhamento -Times 1 -Exactly -ParameterFilter { -not $PermitirCancelar }
+    }
+}
+
+Describe 'Ações do menu (Pester, mocks e processo real)' {
+    It 'Reverter: só scripts com sessão não revertida, na ordem inversa do fluxo' {
+        $raiz = Join-Path $TestDrive ('rev-' + [guid]::NewGuid())
+        foreach ($s in '20261019-100000-Manutencao', '20261019-100100-Limpeza', '20261019-100200-Inicializacao') { New-Item -ItemType Directory -Path (Join-Path $raiz "E2E\$s") -Force | Out-Null }
+        Set-Content -LiteralPath (Join-Path $raiz 'E2E\20261019-100200-Inicializacao\revertido.txt') -Value 'x'
+        (Get-PendenteReversao -Cliente 'E2E' -Raiz $raiz) -join ',' | Should -Be 'Limpeza,Manutencao'
+    }
+
+    It 'Condição do fluxo: sem item, bloqueio e usuário inválido viram Erro; tudo certo traz os scripts e o usuário' {
+        (Get-CondicaoFluxo -Perfil ([pscustomobject]@{ Aplicar = @('A3'); Pular = @() })).Erro | Should -Match 'Nenhum item'
+        Mock Test-PreCondicao { [pscustomobject]@{ Avisos = @('aviso x'); Bloqueios = @('bloqueio y') } }
+        $c = Get-CondicaoFluxo -Perfil ([pscustomobject]@{ Aplicar = @('L1'); Pular = @() })
+        $c.Erro | Should -Match 'bloqueios'
+        $c.Bloqueios | Should -Be 'bloqueio y'
+        Mock Test-PreCondicao { [pscustomobject]@{ Avisos = @('aviso x'); Bloqueios = @() } }
+        Mock Resolve-UsuarioFluxo { throw 'Sem usuário conectado.' }
+        (Get-CondicaoFluxo -Perfil ([pscustomobject]@{ Aplicar = @('L1'); Pular = @() })).Erro | Should -Match 'Usuário alvo: Sem usuário'
+        Mock Resolve-UsuarioFluxo { [pscustomobject]@{ Sid = 'S-1-5-21-1-2-3-1001'; Nome = 'PC\cliente'; DoPerfil = $false } }
+        $c = Get-CondicaoFluxo -Perfil ([pscustomobject]@{ Aplicar = @('L1', 'M3'); Pular = @() })
+        $c.Erro | Should -BeNullOrEmpty
+        $c.Scripts -join ',' | Should -Be 'Manutencao,Limpeza'
+        $c.Avisos | Should -Be 'aviso x'
+        $c.Usuario.Sid | Should -Be 'S-1-5-21-1-2-3-1001'
+    }
+
+    It 'Argumentos do processo: com espaço ou vazio entre aspas' {
+        Join-ArgumentoProcesso -Argumentos '-File', 'C:\Program Files\x.ps1', '-WhatIf', '' | Should -Be '-File "C:\Program Files\x.ps1" -WhatIf ""'
+    }
+
+    It 'Processo real: saída, avisos e erros com acentos na página de código do sistema, e o código de saída' {
+        $s = Join-Path $TestDrive 'filho com espaço.ps1'
+        [IO.File]::WriteAllText($s, "param([string]`$Perfil)`r`nWrite-Host 'host: ação'`r`n`"saída: `$Perfil`"`r`nWrite-Warning 'atenção'`r`nWrite-Error 'erro: é'`r`nexit 3`r`n", $script:Utf8Bom)
+        $x = Start-ProcessoScript -Arquivo $s -Argumentos @('-Perfil', 'C:\perfis\São Paulo.psd1')
+        $linhas = New-Object System.Collections.Generic.List[string]
+        $limite = (Get-Date).AddSeconds(60)
+        do { $r = Read-SaidaProcesso -Execucao $x; foreach ($l in $r.Linhas) { $linhas.Add($l) }; Start-Sleep -Milliseconds 100 } until ($r.Terminou -or (Get-Date) -gt $limite)
+        $texto = $linhas -join "`n"
+        Write-Host "Página OEM: $((Get-CodificacaoConsole).WebName)"
+        $r.Terminou | Should -BeTrue
+        $r.Codigo | Should -Be 3
+        $texto | Should -Match 'host: ação'
+        $texto | Should -Match ([regex]::Escape('saída: C:\perfis\São Paulo.psd1'))
+        $texto | Should -Match 'atenção'
+        $texto | Should -Match 'erro: é'
+    }
+}
+
+Describe 'Registro do fluxo com a janela (Pester, mocks)' {
+    It 'Falha ao registrar a janela não impede o fluxo e fica no log' {
+        Mock Register-TarefaFluxo { }
+        Mock Register-TarefaAcompanhar { throw 'sem permissão' }
+        $raiz = Join-Path $TestDrive ('real-' + [guid]::NewGuid())
+        $pasta = Start-FluxoOtimizacao -PerfilOrigem (New-ArquivoPerfil) -UsuarioSid 'S-1-5-21-1-2-3-1001' -Raiz $raiz
+        (Get-EstadoFluxo -Pasta $pasta).Status | Should -Be 'EmAndamento'
+        [IO.File]::ReadAllText((Join-Path $pasta 'fluxo.log'), [Text.Encoding]::UTF8) | Should -Match 'Janela de acompanhamento não registrada: sem permissão'
+    }
+
+    It 'Remove-TarefasFluxo remove a janela primeiro e a tarefa do fluxo por último' {
+        $script:Ordem = New-Object System.Collections.Generic.List[string]
+        Mock Remove-TarefaOtimizacao { $script:Ordem.Add($Nome) }
+        Remove-TarefasFluxo
+        $script:Ordem -join ',' | Should -Be 'Acompanhar,Fluxo'
+    }
+}
+
 Describe 'Preparação real na VM' {
     BeforeAll {
         $script:SidCliente = (Get-LocalUser -Name cliente).SID.Value
@@ -263,6 +437,7 @@ Describe 'Preparação real na VM' {
     AfterAll {
         Unregister-ScheduledTask -TaskPath '\Otimizacao\' -TaskName 'Fluxo' -Confirm:$false -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskPath '\Otimizacao\' -TaskName 'Mensagem' -Confirm:$false -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskPath '\Otimizacao\' -TaskName 'Acompanhar' -Confirm:$false -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $script:RaizReal -Recurse -Force -ErrorAction SilentlyContinue
     }
 
@@ -285,9 +460,20 @@ Describe 'Preparação real na VM' {
         $t.Settings.ExecutionTimeLimit | Should -Be 'PT0S'
         $t.Actions[0].Arguments | Should -Match ([regex]::Escape("-Continuar `"$pasta`""))
 
+        # Janela de acompanhamento: logon do usuário alvo, logon interativo sem senha, elevada, sem limite de tempo.
+        $a = Get-ScheduledTask -TaskPath '\Otimizacao\' -TaskName 'Acompanhar'
+        $a.Triggers[0].CimClass.CimClassName | Should -Be 'MSFT_TaskLogonTrigger'
+        ([Security.Principal.NTAccount]$a.Triggers[0].UserId).Translate([Security.Principal.SecurityIdentifier]).Value | Should -Be $script:SidCliente
+        ([Security.Principal.NTAccount]$a.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value | Should -Be $script:SidCliente
+        [string]$a.Principal.LogonType | Should -Be 'Interactive'
+        [string]$a.Principal.RunLevel | Should -Be 'Highest'
+        $a.Settings.ExecutionTimeLimit | Should -Be 'PT0S'
+        $a.Actions[0].Arguments | Should -Match ([regex]::Escape("-Acompanhar `"$pasta`""))
+        $a.Actions[0].Arguments | Should -Match '-WindowStyle Hidden'
+
         { Start-FluxoOtimizacao -PerfilOrigem (New-ArquivoPerfil) -UsuarioSid $script:SidCliente -Raiz $script:RaizReal } | Should -Throw '*fluxo em andamento*'
 
-        Remove-TarefaOtimizacao -Nome 'Fluxo'
+        Remove-TarefasFluxo
         Get-ScheduledTask -TaskPath '\Otimizacao\' -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
     }
 
