@@ -636,9 +636,12 @@ function Select-PerfilMenu {
             $pasta = @(Get-PastaPerfil)[0]
             if (-not (Test-Path -LiteralPath $pasta)) { New-Item -ItemType Directory -Path $pasta -Force | Out-Null; Set-AcessoRestrito -Pasta $pasta }
             # Carregado só aqui: o fluxo no boot não precisa das funções de leitura do Novo perfil.
-            . (Join-Path $PSScriptRoot 'Perfil.ps1')
-            $novo = New-PerfilInterativo -Pasta $pasta
-            if ($novo) { return [pscustomobject]@{ Caminho = $novo; Perfil = Import-PerfilCliente -Caminho $novo } }
+            try {
+                . (Join-Path $PSScriptRoot 'Perfil.ps1')
+                $novo = New-PerfilInterativo -Pasta $pasta
+                if ($novo) { return [pscustomobject]@{ Caminho = $novo; Perfil = Import-PerfilCliente -Caminho $novo } }
+            }
+            catch { Write-Host "Novo perfil interrompido: $($_.Exception.Message)" -ForegroundColor Red }
             continue
         }
         $n = 0

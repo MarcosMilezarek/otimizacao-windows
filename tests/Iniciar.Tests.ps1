@@ -65,7 +65,63 @@ Describe 'Install-ProjetoIniciar' {
     }
 }
 
+Describe 'Pastas e ACL seguras' {
+    BeforeEach { $script:Raiz = Join-Path $TestDrive ([guid]::NewGuid()) }
+
+    It 'Pasta temporária que é junção aborta sem apagar o alvo da junção' {
+        $alvo = Join-Path $TestDrive ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path $alvo, (Join-Path $script:Raiz 'app') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $alvo 'sentinela.txt') -Value 'x'
+        New-Item -ItemType Junction -Path (Join-Path $script:Raiz 'app\.baixando-aaaaaaa') -Target $alvo | Out-Null
+        Mock Invoke-WebRequest { }
+        { Install-ProjetoIniciar -Raiz $script:Raiz -Repo 'u/r' -Commit $script:Commit -Arquivos (New-Tabela) } | Should -Throw '*jun*'
+        Test-Path -LiteralPath (Join-Path $alvo 'sentinela.txt') | Should -BeTrue
+    }
+
+    It 'Pasta app que é junção aborta' {
+        $alvo = Join-Path $TestDrive ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path $alvo, $script:Raiz -Force | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $script:Raiz 'app') -Target $alvo | Out-Null
+        Mock Invoke-WebRequest { }
+        { Install-ProjetoIniciar -Raiz $script:Raiz -Repo 'u/r' -Commit $script:Commit -Arquivos (New-Tabela) } | Should -Throw '*jun*'
+        Should -Invoke Invoke-WebRequest -Times 0
+    }
+
+    It 'ACL segura: dono Administradores e só SYSTEM, Administradores e Usuários (leitura)' {
+        Mock Get-EstadoAcl { [pscustomobject]@{ Dono = 'S-1-5-32-544'; Regras = @(
+                    [pscustomobject]@{ Sid = 'S-1-5-18'; Direitos = 2032127; Tipo = 'Allow' }
+                    [pscustomobject]@{ Sid = 'S-1-5-32-544'; Direitos = 2032127; Tipo = 'Allow' }
+                    [pscustomobject]@{ Sid = 'S-1-5-32-545'; Direitos = 1179817; Tipo = 'Allow' }) } }
+        Test-AclSegura -Caminho 'C:\x' | Should -BeTrue
+    }
+
+    It 'ACL insegura: dono usuário comum' {
+        Mock Get-EstadoAcl { [pscustomobject]@{ Dono = 'S-1-5-21-1-2-3-1001'; Regras = @([pscustomobject]@{ Sid = 'S-1-5-18'; Direitos = 2032127; Tipo = 'Allow' }) } }
+        Test-AclSegura -Caminho 'C:\x' | Should -BeFalse
+    }
+
+    It 'ACL insegura: permissão para outro SID (Todos)' {
+        Mock Get-EstadoAcl { [pscustomobject]@{ Dono = 'S-1-5-32-544'; Regras = @([pscustomobject]@{ Sid = 'S-1-1-0'; Direitos = 2032127; Tipo = 'Allow' }) } }
+        Test-AclSegura -Caminho 'C:\x' | Should -BeFalse
+    }
+
+    It 'ACL insegura: Usuários com gravação' {
+        Mock Get-EstadoAcl { [pscustomobject]@{ Dono = 'S-1-5-32-544'; Regras = @([pscustomobject]@{ Sid = 'S-1-5-32-545'; Direitos = 1180063; Tipo = 'Allow' }) } }
+        Test-AclSegura -Caminho 'C:\x' | Should -BeFalse
+    }
+}
+
 Describe 'Start-Iniciar' {
+    It 'ACL insegura depois de proteger aborta sem abrir o Menu' {
+        Mock Test-AdministradorIniciar { $true }
+        Mock Set-AcessoRestritoIniciar { }
+        Mock Install-ProjetoIniciar { $TestDrive }
+        Mock Test-AclSegura { $false }
+        Mock Start-Process { }
+        { Start-Iniciar } | Should -Throw '*permiss*'
+        Should -Invoke Start-Process -Times 0
+    }
+
     It 'Sem administrador aborta antes de baixar' {
         Mock Test-AdministradorIniciar { $false }
         Mock Invoke-WebRequest { }
@@ -77,6 +133,8 @@ Describe 'Start-Iniciar' {
         Mock Test-AdministradorIniciar { $true }
         Mock Install-ProjetoIniciar { 'C:\X\app\aaaaaaa' }
         Mock Set-AcessoRestritoIniciar { }
+        Mock Test-AclSegura { $true }
+        Mock Get-ChildItem { }
         Mock Start-Process { }
         Start-Iniciar
         Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter { ($ArgumentList -join ' ') -like '*-ExecutionPolicy Bypass -File "C:\X\app\aaaaaaa\src\Menu.ps1"*' }

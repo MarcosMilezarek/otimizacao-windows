@@ -54,6 +54,14 @@ Describe 'ConvertFrom-Selecao' {
         { ConvertFrom-Selecao -Texto 'X9' -Validos 'L1' } | Should -Throw -ExceptionType ([ArgumentException])
     }
 
+    It 'Número enorme lança ArgumentException em vez de estourar' {
+        { ConvertFrom-Selecao -Texto '99999999999' -Validos 'L1' } | Should -Throw -ExceptionType ([ArgumentException])
+    }
+
+    It 'Faixa enorme lança ArgumentException sem montar a lista' {
+        { ConvertFrom-Selecao -Texto '1-2000000000' -Validos 'L1', 'L2' } | Should -Throw -ExceptionType ([ArgumentException])
+    }
+
     It 'Texto vazio devolve lista vazia' {
         @(ConvertFrom-Selecao -Texto '' -Validos 'L1').Count | Should -Be 0
     }
@@ -148,6 +156,19 @@ Describe 'Listas da máquina' {
         }
         (@(Get-CandidatoA2) | ForEach-Object { $_.Nome }) -join '|' | Should -Be 'HP Smart'
     }
+
+    It 'A2 esconde Appx do sistema ou não removível e programa sem fabricante com nome Microsoft' {
+        Mock Get-ProgramaMaquina {
+            [pscustomobject]@{ Nome = 'Email, telefone ou Skype'; Fabricante = 'Atribuída por sua organização'; Versao = '1'; Tipo = 'Appx'; Id = 'Microsoft.AAD.BrokerPlugin' }
+            [pscustomobject]@{ Nome = 'Microsoft Windows Application Compatibility Fix Database'; Fabricante = ''; Versao = '1'; Tipo = 'EXE'; Id = 'CompatFix' }
+            [pscustomobject]@{ Nome = 'HP Smart'; Fabricante = 'HP Inc.'; Versao = '1'; Tipo = 'Appx'; Id = 'AD2F1837.HPPrinterControl' }
+        }
+        Mock Get-AppxPackage {
+            [pscustomobject]@{ Name = 'Microsoft.AAD.BrokerPlugin'; NonRemovable = $true; SignatureKind = 'System' }
+            [pscustomobject]@{ Name = 'AD2F1837.HPPrinterControl'; NonRemovable = $false; SignatureKind = 'Store' }
+        }
+        (@(Get-CandidatoA2) | ForEach-Object { $_.Nome }) -join '|' | Should -Be 'HP Smart'
+    }
 }
 
 Describe 'New-PerfilInterativo' {
@@ -198,6 +219,13 @@ Describe 'New-PerfilInterativo' {
         Mock Get-CandidatoI10 { [pscustomobject]@{ Nome = 'Svc X'; Exibicao = 'Serviço X'; Inicio = 'Automático' } }
         Set-Respostas 'ClienteE', '1', '', '', 'I10', '', '', '1', 'D', 'S'
         (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Opcoes.I10Servicos['Svc X'] | Should -Be 'Disabled'
+    }
+
+    It 'Resumo mostra o nome do programa escolhido no A2, não só o Id' {
+        Mock Get-CandidatoA2 { [pscustomobject]@{ Nome = 'HP Smart'; Fabricante = 'HP Inc.'; Versao = '1'; Tipo = 'Appx'; Id = 'AD2F1837.HPPrinterControl' } }
+        Set-Respostas 'ClienteK', '1', '', 'A2', '', '', '', '1', 'S'
+        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Opcoes.A2Remover -join '|' | Should -Be 'AD2F1837.HPPrinterControl'
+        Should -Invoke Write-Host -ParameterFilter { "$Object" -like '*-> HP Smart*' }
     }
 
     It 'Resposta 0 cancela sem gravar' {
@@ -270,6 +298,15 @@ Describe 'Menu: escolha e criação de perfil' {
         Select-PerfilMenu | Should -BeNullOrEmpty
     }
 
+    It 'Erro inesperado no Novo perfil volta à lista sem derrubar o Menu' {
+        $script:Respostas = New-Object System.Collections.Queue
+        'N', '0' | ForEach-Object { $script:Respostas.Enqueue($_) }
+        Mock Read-Opcao { $script:Respostas.Dequeue() }
+        Mock New-PerfilInterativo { throw 'falha inesperada' }
+        { Select-PerfilMenu } | Should -Not -Throw
+        Should -Invoke New-PerfilInterativo -Times 1 -Exactly
+    }
+
     It 'Novo perfil cancelado volta à lista' {
         $script:Respostas = New-Object System.Collections.Queue
         'N', '0' | ForEach-Object { $script:Respostas.Enqueue($_) }
@@ -304,6 +341,13 @@ Describe 'Save-PerfilGerado' {
         $p.Opcoes.M8Inicio | Should -Be 7
         $p.Opcoes.M8Fim | Should -Be 19
         foreach ($c in 'Inicializacao', 'Servicos', 'Tarefas', 'Aplicativos') { $p.Protegidos.ContainsKey($c) | Should -BeTrue }
+    }
+
+    It 'Apóstrofo tipográfico (U+2019) relê idêntico' {
+        $nome = "Mike$([char]0x2019)s Tool"
+        $script:Dados.Opcoes.I1Desabilitar = @($nome)
+        $arq = Save-PerfilGerado -Dados $script:Dados -Pasta $script:Pasta
+        @((Import-PerfilCliente -Caminho $arq).Opcoes.I1Desabilitar) -join '|' | Should -Be $nome
     }
 
     It 'Grava em UTF-8 com BOM' {

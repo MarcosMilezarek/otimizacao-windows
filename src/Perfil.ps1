@@ -17,43 +17,43 @@ Import-Module (Join-Path $PSScriptRoot 'Otimizacao.Comum.psm1') -Force
 
 # Textos resumidos do cabeçalho de ajuda de cada script (fonte única: o script; nada além do que está lá).
 $script:CatalogoPerfil = @(
-    @{ Id = 'M1'; Script = 'Manutencao'; Texto = 'Verifica a imagem do Windows (DISM ScanHealth).'; Perda = 'Nada; com reparo aprovado, baixa arquivos pelo Windows Update e leva vários minutos.' }
-    @{ Id = 'M2'; Script = 'Manutencao'; Texto = 'Verifica os arquivos de sistema (sfc /verifyonly).'; Perda = 'Nada; com reparo aprovado, roda sfc /scannow.' }
-    @{ Id = 'M3'; Script = 'Manutencao'; Texto = 'Verifica o sistema de arquivos dos volumes fixos (Repair-Volume -Scan).'; Perda = 'Nada: só verifica.' }
+    @{ Id = 'M1'; Script = 'Manutencao'; Texto = 'Verifica a imagem do Windows (DISM ScanHealth).'; Perda = 'Disco e CPU ocupados por vários minutos; com reparo aprovado, consome banda de internet (Windows Update).' }
+    @{ Id = 'M2'; Script = 'Manutencao'; Texto = 'Verifica os arquivos de sistema (sfc /verifyonly).'; Perda = 'Disco e CPU ocupados por vários minutos.' }
+    @{ Id = 'M3'; Script = 'Manutencao'; Texto = 'Verifica o sistema de arquivos dos volumes fixos (Repair-Volume -Scan).'; Perda = 'Disco e CPU ocupados por vários minutos.' }
     @{ Id = 'M4'; Script = 'Manutencao'; Texto = 'Garante o TRIM do NTFS ligado quando há SSD.'; Perda = 'Nada (padrão do Windows).' }
-    @{ Id = 'M8'; Script = 'Manutencao'; Texto = 'Horário ativo do Windows Update por política.'; Perda = 'Reinicializações automáticas só fora do horário definido.' }
-    @{ Id = 'A1'; Script = 'Aplicativos'; Texto = 'Remove apps de consumo da lista base (Clipchamp, Notícias, Clima, Solitaire, Xbox, jogos de fábrica etc.).'; Perda = 'Os apps removidos; reinstalação manual pela Microsoft Store.'; Aviso = 'Aprovar A1 aprova a lista base inteira.' }
-    @{ Id = 'A2'; Script = 'Aplicativos'; Texto = 'Remove programas do fabricante escolhidos (Appx e MSI; EXE fica para remoção manual).'; Perda = 'Os programas removidos; reinstalação com o instalador do fabricante.'; Opcao = 'A2Remover' }
+    @{ Id = 'M8'; Script = 'Manutencao'; Texto = 'Horário ativo do Windows Update por política.'; Perda = 'O usuário não muda mais o horário ativo em Configurações ("gerenciado pela organização") e o ajuste automático do horário ativo é desligado.' }
+    @{ Id = 'A1'; Script = 'Aplicativos'; Texto = 'Remove apps de consumo da lista base (Clipchamp, Notícias, Clima, Solitaire, Xbox, jogos de fábrica etc.).'; Perda = 'Os apps removidos, a gravação de tela Win+G (Game Bar) e o app Xbox; reinstalação manual pela Microsoft Store.'; Aviso = 'Aprovar A1 aprova a lista base inteira.' }
+    @{ Id = 'A2'; Script = 'Aplicativos'; Texto = 'Remove programas do fabricante escolhidos (Appx e MSI; EXE fica para remoção manual).'; Perda = 'Os programas removidos; reinstalação manual pela Microsoft Store (Appx) ou pelo instalador do fabricante (MSI).'; Opcao = 'A2Remover' }
     @{ Id = 'A3'; Script = 'Aplicativos'; Texto = 'OneDrive não é removido (para tirá-lo da inicialização, use o I1).'; Perda = 'Nada: informativo.'; Informativo = $true }
     @{ Id = 'A4'; Script = 'Aplicativos'; Texto = 'Remove o Teams pessoal do Windows 11 (Chat). O Teams novo nunca é tocado.'; Perda = 'O Chat do Windows 11; reinstalação pela Microsoft Store.' }
-    @{ Id = 'I1'; Script = 'Inicializacao'; Texto = 'Desabilita entradas de inicialização escolhidas (como o Gerenciador de Tarefas).'; Perda = 'Os programas escolhidos deixam de abrir sozinhos ao entrar.'; Opcao = 'I1Desabilitar' }
-    @{ Id = 'I2'; Script = 'Inicializacao'; Texto = 'Edge sem aceleração de inicialização e sem execução em segundo plano.'; Perda = 'O Edge abre um pouco mais devagar na primeira vez.' }
-    @{ Id = 'I3'; Script = 'Inicializacao'; Texto = 'Chrome sem execução em segundo plano.'; Perda = 'Notificações e apps do Chrome com ele fechado.' }
-    @{ Id = 'I4'; Script = 'Inicializacao'; Texto = 'Nega execução em segundo plano aos apps da Store escolhidos.'; Perda = 'Notificações e atualização em segundo plano desses apps.'; Opcao = 'I4NegarSegundoPlano' }
-    @{ Id = 'I5'; Script = 'Inicializacao'; Texto = 'Widgets desligados (Windows 11). Pulado com o driver UCPD ativo.'; Perda = 'O painel de Widgets.' }
-    @{ Id = 'I6'; Script = 'Inicializacao'; Texto = 'Remove o app Microsoft Copilot de consumidor (não toca no Microsoft 365 Copilot).'; Perda = 'O app Copilot; reinstalação pela Microsoft Store.' }
-    @{ Id = 'I7'; Script = 'Inicializacao'; Texto = 'Sugestões da web desligadas na caixa de busca (confiança baixa: conferir no cliente).'; Perda = 'Resultados da web na busca.' }
-    @{ Id = 'I8'; Script = 'Inicializacao'; Texto = 'Gravação em segundo plano do Game Bar desligada.'; Perda = 'Gravar os últimos minutos de jogo.' }
-    @{ Id = 'I9'; Script = 'Inicializacao'; Texto = 'Desabilita tarefas agendadas de terceiros escolhidas.'; Perda = 'O que a tarefa fazia (ex.: verificar atualização do programa).'; Opcao = 'I9Tarefas' }
-    @{ Id = 'I10'; Script = 'Inicializacao'; Texto = 'Tipo de início de serviços de terceiros escolhidos (Manual ou Desativado).'; Perda = 'O que o serviço fazia com início automático; vale após reiniciar.'; Opcao = 'I10Servicos' }
-    @{ Id = 'I11'; Script = 'Inicializacao'; Texto = 'Sugestões de terceiros desligadas (no Enterprise e Education, também experiências de consumidor).'; Perda = 'Sugestões e apps promovidos pelo Windows.' }
+    @{ Id = 'I1'; Script = 'Inicializacao'; Texto = 'Desabilita entradas de inicialização escolhidas (como o Gerenciador de Tarefas).'; Perda = 'O programa não inicia sozinho.'; Opcao = 'I1Desabilitar' }
+    @{ Id = 'I2'; Script = 'Inicializacao'; Texto = 'Edge sem aceleração de inicialização e sem execução em segundo plano.'; Perda = 'O Edge fica cerca de 1 s mais lento para abrir.' }
+    @{ Id = 'I3'; Script = 'Inicializacao'; Texto = 'Chrome sem execução em segundo plano.'; Perda = 'Notificações com o app fechado.' }
+    @{ Id = 'I4'; Script = 'Inicializacao'; Texto = 'Nega execução em segundo plano aos apps da Store escolhidos.'; Perda = 'Notificações com o app fechado.'; Opcao = 'I4NegarSegundoPlano' }
+    @{ Id = 'I5'; Script = 'Inicializacao'; Texto = 'Widgets desligados (Windows 11). Pulado com o driver UCPD ativo.'; Perda = 'O painel de widgets.' }
+    @{ Id = 'I6'; Script = 'Inicializacao'; Texto = 'Remove o app Microsoft Copilot de consumidor (não toca no Microsoft 365 Copilot).'; Perda = 'O app Copilot; volta só reinstalando pela Microsoft Store.' }
+    @{ Id = 'I7'; Script = 'Inicializacao'; Texto = 'Sugestões da web desligadas na caixa de busca (confiança baixa: conferir no cliente).'; Perda = 'Resultados da web no Iniciar (se tiver efeito).' }
+    @{ Id = 'I8'; Script = 'Inicializacao'; Texto = 'Gravação em segundo plano do Game Bar desligada.'; Perda = 'A gravação do Game Bar.' }
+    @{ Id = 'I9'; Script = 'Inicializacao'; Texto = 'Desabilita tarefas agendadas de terceiros escolhidas.'; Perda = 'A tarefa não inicia sozinha.'; Opcao = 'I9Tarefas' }
+    @{ Id = 'I10'; Script = 'Inicializacao'; Texto = 'Tipo de início de serviços de terceiros escolhidos (Manual ou Desativado).'; Perda = 'O serviço não inicia sozinho (vale após reiniciar).'; Opcao = 'I10Servicos' }
+    @{ Id = 'I11'; Script = 'Inicializacao'; Texto = 'Sugestões de terceiros desligadas (no Enterprise e Education, também experiências de consumidor).'; Perda = 'Sugestões e dicas.' }
     @{ Id = 'I12'; Script = 'Inicializacao'; Texto = 'Recall sem snapshots e Click to Do desligado (só PCs Copilot+).'; Perda = 'Recall e Click to Do.' }
-    @{ Id = 'V1'; Script = 'VisualEnergia'; Texto = 'Animações desligadas (mantém suavização de fontes, miniaturas e sombras).'; Perda = 'Animações de janelas, menus e barra de tarefas.' }
-    @{ Id = 'V2'; Script = 'VisualEnergia'; Texto = 'Transparência desligada.'; Perda = 'Efeito de transparência.' }
-    @{ Id = 'V3'; Script = 'VisualEnergia'; Texto = 'Plano de energia Desempenho máximo (alternativa em Modern Standby).'; Perda = 'Mais consumo e temperatura.'; Aviso = 'Em notebook reduz a autonomia da bateria.' }
-    @{ Id = 'V4'; Script = 'VisualEnergia'; Texto = 'Modo de energia Melhor desempenho na tomada (só vale com o Equilibrado ativo).'; Perda = 'Mais consumo na tomada.' }
+    @{ Id = 'V1'; Script = 'VisualEnergia'; Texto = 'Animações desligadas (mantém suavização de fontes, miniaturas e sombras).'; Perda = 'Animações.' }
+    @{ Id = 'V2'; Script = 'VisualEnergia'; Texto = 'Transparência desligada.'; Perda = 'Transparência.' }
+    @{ Id = 'V3'; Script = 'VisualEnergia'; Texto = 'Plano de energia Desempenho máximo (alternativa em Modern Standby).'; Perda = 'Mais consumo de energia e temperatura.'; Aviso = 'Em notebook reduz a autonomia da bateria.' }
+    @{ Id = 'V4'; Script = 'VisualEnergia'; Texto = 'Modo de energia Melhor desempenho na tomada (só vale com o Equilibrado ativo).'; Perda = 'Não declarado no script; mesma natureza do V3 (mais consumo na tomada).' }
     @{ Id = 'V5'; Script = 'VisualEnergia'; Texto = 'Inicialização rápida: mantida; desliga só se escolhido.'; Perda = 'Desligada: boot a frio mais lento.' }
-    @{ Id = 'V6'; Script = 'VisualEnergia'; Texto = 'Hibernação desligada, só em desktop (libera o hiberfil.sys).'; Perda = 'Hibernação e inicialização rápida.' }
+    @{ Id = 'V6'; Script = 'VisualEnergia'; Texto = 'Hibernação desligada, só em desktop (libera o hiberfil.sys).'; Perda = 'Hibernação e inicialização rápida (boot a frio mais lento).' }
     @{ Id = 'V7'; Script = 'VisualEnergia'; Texto = 'Num Lock ligado na inicialização.'; Perda = 'Nada.' }
     @{ Id = 'V8'; Script = 'VisualEnergia'; Texto = 'Mostrar extensões de arquivos conhecidos.'; Perda = 'Nada.' }
     @{ Id = 'V9'; Script = 'VisualEnergia'; Texto = 'Finalizar tarefa no menu da barra de tarefas (Windows 11 23H2 ou superior).'; Perda = 'Nada.' }
-    @{ Id = 'V10'; Script = 'VisualEnergia'; Texto = 'Desliga o atalho das Teclas de Aderência (Shift 5 vezes).'; Perda = 'O atalho (o recurso continua em Configurações).' }
-    @{ Id = 'L1'; Script = 'Limpeza'; Texto = 'Temporários do Windows (%windir%\Temp) antigos.'; Perda = 'Nada.' }
-    @{ Id = 'L2'; Script = 'Limpeza'; Texto = 'Temporários de todos os perfis de usuário antigos.'; Perda = 'Nada.' }
-    @{ Id = 'L3'; Script = 'Limpeza'; Texto = 'Cache do Chrome e do Edge (nunca cookies, senhas, histórico ou sessões).'; Perda = 'Primeiro acesso aos sites um pouco mais lento.' }
-    @{ Id = 'L4'; Script = 'Limpeza'; Texto = 'Cache de download do Windows Update.'; Perda = 'Atualizações pendentes são baixadas de novo.'; Aviso = 'Exige aprovação específica do cliente.' }
-    @{ Id = 'L5'; Script = 'Limpeza'; Texto = 'Lixeira de todos os usuários.'; Perda = 'O conteúdo da Lixeira, sem volta.'; Aviso = 'Exige aprovação específica do cliente.' }
-    @{ Id = 'L6'; Script = 'Limpeza'; Texto = 'Windows.old (Limpeza de Disco).'; Perda = 'Voltar para a versão anterior do Windows.'; Aviso = 'Exige aprovação específica do cliente.' }
+    @{ Id = 'V10'; Script = 'VisualEnergia'; Texto = 'Desliga o atalho das Teclas de Aderência (Shift 5 vezes).'; Perda = 'O atalho de acessibilidade (o recurso continua disponível em Configurações).' }
+    @{ Id = 'L1'; Script = 'Limpeza'; Texto = 'Temporários do Windows (%windir%\Temp) antigos.'; Perda = 'Arquivos temporários apagados, sem reversão.' }
+    @{ Id = 'L2'; Script = 'Limpeza'; Texto = 'Temporários de todos os perfis de usuário antigos.'; Perda = 'Arquivos temporários apagados, sem reversão.' }
+    @{ Id = 'L3'; Script = 'Limpeza'; Texto = 'Cache do Chrome e do Edge (nunca cookies, senhas, histórico ou sessões).'; Perda = 'Caches apagados, sem reversão; primeiras páginas mais lentas até o cache se refazer.' }
+    @{ Id = 'L4'; Script = 'Limpeza'; Texto = 'Cache de download do Windows Update.'; Perda = 'Arquivos apagados, sem reversão; o Windows Update baixa de novo o que estiver pendente.'; Aviso = 'Exige aprovação específica do cliente.' }
+    @{ Id = 'L5'; Script = 'Limpeza'; Texto = 'Lixeira de todos os usuários.'; Perda = 'O conteúdo da Lixeira, sem reversão.'; Aviso = 'Exige aprovação específica do cliente.' }
+    @{ Id = 'L6'; Script = 'Limpeza'; Texto = 'Windows.old (Limpeza de Disco).'; Perda = 'A opção de voltar à versão anterior do Windows.'; Aviso = 'Exige aprovação específica do cliente.' }
     @{ Id = 'L7'; Script = 'Limpeza'; Texto = 'Limpeza de componentes (DISM StartComponentCleanup, nunca ResetBase).'; Perda = 'Desinstalar atualizações já substituídas.'; Aviso = 'Exige aprovação específica do cliente.' }
     @{ Id = 'L8'; Script = 'Limpeza'; Texto = 'HDD: desfragmenta. SSD: garante a otimização agendada (TRIM).'; Perda = 'Nada.' }
     @{ Id = 'L9'; Script = 'Limpeza'; Texto = 'Sensor de Armazenamento ligado para temporários (Lixeira e Downloads nunca).'; Perda = 'Nada.' }
@@ -75,15 +75,14 @@ function ConvertFrom-Selecao {
     param([AllowEmptyString()][string]$Texto, [Parameter(Mandatory)][string[]]$Validos)
     $escolhidos = New-Object System.Collections.Generic.HashSet[string]
     foreach ($t in @($Texto -split '[\s,;]+' | Where-Object { $_ })) {
-        $faixa = [regex]::Match($t, '^(\d+)-(\d+)$')
-        $indices = $null
-        if ($faixa.Success) { $indices = [int]$faixa.Groups[1].Value..[int]$faixa.Groups[2].Value }
-        elseif ($t -match '^\d+$') { $indices = @([int]$t) }
-        if ($null -ne $indices) {
-            foreach ($n in $indices) {
-                if ($n -lt 1 -or $n -gt $Validos.Count) { throw [ArgumentException]"Opção '$t' fora da lista (1 a $($Validos.Count))." }
-                [void]$escolhidos.Add($Validos[$n - 1])
-            }
+        # Até 4 dígitos (nenhuma lista chega a 10000 itens); limites conferidos antes de montar a faixa.
+        $faixa = [regex]::Match($t, '^(\d{1,4})-(\d{1,4})$')
+        $limites = $null
+        if ($faixa.Success) { $limites = @([int]$faixa.Groups[1].Value, [int]$faixa.Groups[2].Value) }
+        elseif ($t -match '^\d{1,4}$') { $limites = @([int]$t, [int]$t) }
+        if ($null -ne $limites) {
+            if (@($limites | Where-Object { $_ -lt 1 -or $_ -gt $Validos.Count }).Count) { throw [ArgumentException]"Opção '$t' fora da lista (1 a $($Validos.Count))." }
+            foreach ($n in $limites[0]..$limites[1]) { [void]$escolhidos.Add($Validos[$n - 1]) }
             continue
         }
         $id = @($Validos | Where-Object { $_ -eq $t })
@@ -99,7 +98,8 @@ function ConvertTo-LiteralPerfil {
     if ($null -eq $Valor) { return '$null' }
     if ($Valor -is [bool]) { return $(if ($Valor) { '$true' } else { '$false' }) }
     if ($Valor -is [int] -or $Valor -is [long]) { return [string]$Valor }
-    if ($Valor -is [string]) { return "'" + $Valor.Replace("'", "''") + "'" }
+    # Escape oficial do PowerShell: dobra também os apóstrofos tipográficos (U+2018 a U+201B), que ele trata como aspas.
+    if ($Valor -is [string]) { return "'" + [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Valor) + "'" }
     if ($Valor -is [Collections.IDictionary]) {
         if (-not $Valor.Count) { return '@{}' }
         $interno = "$Recuo    "
@@ -236,8 +236,17 @@ function Get-UsuarioLocal {
 }
 
 function Get-CandidatoA2 {
-    <# Programas da máquina que o A2 aceita remover (sem Microsoft, sem ferramentas de driver e BIOS, sem os nunca removidos). #>
-    Get-ProgramaMaquina | Where-Object { -not (Get-MotivoProibido -Programa $_ -A2) } | Sort-Object -Property Nome |
+    <#
+        Programas da máquina que o A2 aceita remover: sem Microsoft, sem ferramentas de driver e BIOS, sem os nunca
+        removidos, sem Appx NonRemovable ou do sistema (o Remove-PacoteAppx recusa) e sem programa de fabricante vazio
+        com nome ou Id da Microsoft (componentes do Windows sem fabricante no registro).
+    #>
+    $sistema = @(try { Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { $_.NonRemovable -or [string]$_.SignatureKind -eq 'System' } | ForEach-Object { $_.Name } }
+        catch { Write-Warning "A2: não foi possível ler os pacotes Appx de todos os usuários ($($_.Exception.Message))." })
+    Get-ProgramaMaquina | Where-Object {
+        -not (Get-MotivoProibido -Programa $_ -A2) -and -not ($_.Tipo -eq 'Appx' -and $sistema -contains $_.Id) -and
+        -not (-not $_.Fabricante -and ($_.Nome -like 'Microsoft*' -or $_.Id -like 'Microsoft*'))
+    } | Sort-Object -Property Nome |
         ForEach-Object { [pscustomobject]@{ Nome = $_.Nome; Fabricante = $_.Fabricante; Versao = $_.Versao; Tipo = $_.Tipo; Id = $_.Id } }
 }
 
@@ -355,6 +364,7 @@ function New-PerfilInterativo {
         if (-not $marcados.Count) { Write-Host 'Nenhum item marcado. Nada foi gravado.' -ForegroundColor Yellow; return $null }
 
         $opcoes = @{}
+        $rotulos = @{}
         $alvo = $null
         foreach ($it in @($catalogo | Where-Object { $_.Opcao -and $marcados.Contains($_.Id) })) {
             try {
@@ -368,6 +378,8 @@ function New-PerfilInterativo {
             for ($i = 0; $i -lt $lista.Count; $i++) { Write-Host ('  {0,2}. {1}' -f ($i + 1), $lista[$i].Rotulo) }
             $escolha = @(Read-Selecao -Pergunta "Escolha para $($it.Id) (números; Enter = nenhum)" -Validos @($lista.Valor))
             if (-not $escolha.Count) { Write-Host "$($it.Id): nada escolhido. Item desmarcado." -ForegroundColor Yellow; [void]$marcados.Remove($it.Id); continue }
+            # O resumo mostra o que foi escolhido pelo nome (no A2 o perfil guarda só o Id).
+            $rotulos[$it.Id] = @($lista | Where-Object { $escolha -contains $_.Valor } | ForEach-Object { $_.Rotulo })
             if ($it.Id -eq 'I10') {
                 $mapa = @{}
                 foreach ($s in $escolha) {
@@ -378,6 +390,7 @@ function New-PerfilInterativo {
                     }
                 }
                 $opcoes[$it.Opcao] = $mapa
+                $rotulos[$it.Id] = @($lista | Where-Object { $mapa.ContainsKey($_.Valor) } | ForEach-Object { "$($_.Rotulo) = $($mapa[$_.Valor])" })
             }
             else { $opcoes[$it.Opcao] = $escolha }
         }
@@ -392,8 +405,8 @@ function New-PerfilInterativo {
         Write-Host ''
         Write-Host "Resumo: cliente $cliente, usuário $(if ($sid) { ($usuarios | Where-Object Sid -EQ $sid).Nome } else { 'conectado no momento do fluxo' })" -ForegroundColor Cyan
         foreach ($it in @($catalogo | Where-Object { $marcados.Contains($_.Id) })) {
-            $extra = if ($it.Opcao) { $v = $opcoes[$it.Opcao]; if ($v -is [hashtable]) { ($v.Keys | ForEach-Object { "$_=$($v[$_])" }) -join ', ' } else { @($v) -join ', ' } }
-            Write-Host ('  {0,-4} {1}{2}' -f $it.Id, $it.Texto, $(if ($extra) { "  -> $extra" }))
+            Write-Host ('  {0,-4} {1}' -f $it.Id, $it.Texto)
+            foreach ($r in @($rotulos[$it.Id])) { if ($r) { Write-Host "         -> $r" } }
         }
         foreach ($k in @('M1Reparar', 'M2Reparar', 'M8Inicio', 'M8Fim', 'V5DesligarInicializacaoRapida') | Where-Object { $opcoes.ContainsKey($_) }) { Write-Host "  $k = $($opcoes[$k])" }
         if (-not (Read-SimNao 'Gravar este perfil?')) { Write-Host 'Nada foi gravado.'; return $null }

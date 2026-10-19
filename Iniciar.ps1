@@ -59,6 +59,44 @@ function Test-PastaIntegra {
     $true
 }
 
+function Assert-SemJuncaoIniciar {
+    <# Recusa pasta que seja juncao ou link: apagar ou gravar nela atingiria outro lugar com a conta de administrador. #>
+    param([Parameter(Mandatory)][string]$Caminho)
+    $item = Get-Item -LiteralPath $Caminho -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "$Caminho e uma juncao ou link simbolico. Abortado sem baixar nem apagar nada."
+    }
+}
+
+function Get-EstadoAcl {
+    <# Dono e regras de acesso (por SID) de um arquivo ou pasta. #>
+    param([Parameter(Mandatory)][string]$Caminho)
+    $acl = Get-Acl -LiteralPath $Caminho
+    [pscustomobject]@{
+        Dono   = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        Regras = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object {
+                [pscustomobject]@{ Sid = $_.IdentityReference.Value; Direitos = [int]$_.FileSystemRights; Tipo = [string]$_.AccessControlType }
+            })
+    }
+}
+
+function Test-AclSegura {
+    <#
+        Verdadeiro se o dono e Administradores ou SYSTEM e so SYSTEM, Administradores e Usuarios tem permissao, Usuarios
+        sem gravar, apagar ou mudar permissao. Sem isso um usuario comum poderia trocar um script que roda elevado.
+    #>
+    param([Parameter(Mandatory)][string]$Caminho)
+    $estado = Get-EstadoAcl -Caminho $Caminho
+    if ($estado.Dono -notin 'S-1-5-32-544', 'S-1-5-18') { return $false }
+    $gravacao = [int][Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, DeleteSubdirectoriesAndFiles, WriteAttributes, Delete, ChangePermissions, TakeOwnership'
+    foreach ($r in @($estado.Regras | Where-Object { $_.Tipo -eq 'Allow' })) {
+        if ($r.Sid -notin 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545') { return $false }
+        # 0x40000000 = GENERIC_WRITE e 0x10000000 = GENERIC_ALL (regras so de heranca).
+        if ($r.Sid -eq 'S-1-5-32-545' -and ($r.Direitos -band ($gravacao -bor 0x50000000))) { return $false }
+    }
+    $true
+}
+
 function Install-ProjetoIniciar {
     <# Baixa e confere os arquivos do commit; devolve a pasta final <Raiz>\app\<sha7>. #>
     param(
@@ -70,8 +108,9 @@ function Install-ProjetoIniciar {
     $curto = $Commit.Substring(0, 7)
     $app = Join-Path $Raiz 'app'
     $final = Join-Path $app $curto
-    if ((Test-Path -LiteralPath $final) -and (Test-PastaIntegra -Pasta $final -Arquivos $Arquivos)) { return $final }
     $temp = Join-Path $app ".baixando-$curto"
+    foreach ($p in $Raiz, $app, $final, $temp) { Assert-SemJuncaoIniciar -Caminho $p }
+    if ((Test-Path -LiteralPath $final) -and (Test-PastaIntegra -Pasta $final -Arquivos $Arquivos)) { return $final }
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
     try {
@@ -94,11 +133,18 @@ function Install-ProjetoIniciar {
 }
 
 function Set-AcessoRestritoIniciar {
-    <# Mesmo criterio do Menu (Set-AcessoRestrito): SYSTEM e Administradores com controle total, Usuarios com leitura. #>
+    <#
+        Mesmo criterio do Menu (Set-AcessoRestrito): SYSTEM e Administradores com controle total, Usuarios com leitura.
+        Antes, Administradores viram donos de tudo (quem cria em ProgramData fica dono e pode mudar a ACL) e os itens
+        internos voltam a herdar so da raiz, descartando permissoes explicitas.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Pasta do proprio projeto.')]
     param([Parameter(Mandatory)][string]$Pasta)
-    & "$env:windir\System32\icacls.exe" $Pasta /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    $icacls = "$env:windir\System32\icacls.exe"
+    & $icacls $Pasta /setowner '*S-1-5-32-544' /T /C /Q | Out-Null
+    & $icacls $Pasta /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "icacls falhou em $Pasta (codigo $LASTEXITCODE)." }
+    if (@(Get-ChildItem -LiteralPath $Pasta -Force -ErrorAction SilentlyContinue).Count) { & $icacls (Join-Path $Pasta '*') /reset /T /C /Q | Out-Null }
 }
 
 function Start-Iniciar {
@@ -109,10 +155,15 @@ function Start-Iniciar {
     }
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $raiz = Join-Path $env:ProgramData 'Otimizacao'
+    Assert-SemJuncaoIniciar -Caminho $raiz
     if (-not (Test-Path -LiteralPath $raiz)) { New-Item -ItemType Directory -Path $raiz -Force | Out-Null }
     Set-AcessoRestritoIniciar -Pasta $raiz
     Write-Output "Baixando a vers$([char]0xE3)o $($script:CommitIniciar.Substring(0, 7)) e conferindo SHA256..."
     $pasta = Install-ProjetoIniciar -Raiz $raiz -Repo $script:RepoIniciar -Commit $script:CommitIniciar -Arquivos $script:ArquivosIniciar
+    # Os arquivos conferidos so continuam confiaveis se um usuario comum nao puder troca-los depois.
+    $inseguros = @(@($raiz, $pasta) + @(Get-ChildItem -LiteralPath $pasta -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) |
+            Where-Object { -not (Test-AclSegura -Caminho $_) })
+    if ($inseguros.Count) { throw "Permiss$([char]0xF5)es inseguras em $($inseguros[0]) (dono ou acesso fora de SYSTEM e Administradores). O Menu n$([char]0xE3)o foi aberto." }
     Write-Output "Arquivos conferidos em $pasta. Abrindo o Menu."
     $menu = Join-Path $pasta 'src\Menu.ps1'
     Start-Process -FilePath (Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList @('-NoProfile', '-ExecutionPolicy Bypass', "-File `"$menu`"") -Wait -NoNewWindow
