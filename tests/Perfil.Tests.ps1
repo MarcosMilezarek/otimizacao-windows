@@ -59,6 +59,97 @@ Describe 'ConvertFrom-Selecao' {
     }
 }
 
+Describe 'Listas da máquina' {
+    BeforeAll { $script:Alvo = [pscustomobject]@{ Sid = 'S-1-5-21-1-2-3-1001'; Perfil = 'C:\Users\cliente' } }
+
+    It 'I1 mostra só entradas que não são componentes do Windows' {
+        Mock Invoke-NoHiveUsuario { & $ScriptBlock 'Registry::HKEY_USERS\S-1-5-21-1-2-3-1001' }
+        Mock Get-FonteInicializacao {
+            if ($Escopo -eq 'Maquina') {
+                [pscustomobject]@{ Origem = 'Maquina\Run'; Nome = 'SecurityHealth'; Comando = "$env:windir\System32\SecurityHealthSystray.exe" }
+                [pscustomobject]@{ Origem = 'Maquina\Run'; Nome = 'X Agent'; Comando = '"C:\Program Files\X\x.exe" /min' }
+            }
+            else { [pscustomobject]@{ Origem = 'Usuario\Run'; Nome = 'X Agent'; Comando = '"C:\Program Files\X\x.exe" /min' } }
+        }
+        $r = @(Get-CandidatoI1 -Alvo $script:Alvo)
+        ($r | ForEach-Object { $_.Nome }) -join '|' | Should -Be 'X Agent'
+        Should -Invoke Invoke-NoHiveUsuario -Times 1 -Exactly -ParameterFilter { $Sid -eq 'S-1-5-21-1-2-3-1001' -and $Perfil -eq 'C:\Users\cliente' }
+    }
+
+    It 'I4 descarta frameworks, pacotes do sistema e PFN inválido' {
+        Mock Get-AppxPackage {
+            [pscustomobject]@{ Name = 'Spotify'; PackageFamilyName = 'SpotifyAB.SpotifyMusic_zpdnekdrzrea0'; IsFramework = $false; IsResourcePackage = $false; NonRemovable = $false; SignatureKind = 'Store' }
+            [pscustomobject]@{ Name = 'Fw'; PackageFamilyName = 'Microsoft.VCLibs_8wekyb3d8bbwe'; IsFramework = $true; IsResourcePackage = $false; NonRemovable = $false; SignatureKind = 'Store' }
+            [pscustomobject]@{ Name = 'Sis'; PackageFamilyName = 'Microsoft.Windows.ShellExperienceHost_cw5n1h2txyewy'; IsFramework = $false; IsResourcePackage = $false; NonRemovable = $true; SignatureKind = 'System' }
+            [pscustomobject]@{ Name = 'Ruim'; PackageFamilyName = 'nome invalido'; IsFramework = $false; IsResourcePackage = $false; NonRemovable = $false; SignatureKind = 'Store' }
+        }
+        Mock Get-NomeExibicaoAppx { [pscustomobject]@{ Nome = "App $($Pacote.Name)"; Fabricante = 'X' } }
+        $r = @(Get-CandidatoI4 -Alvo $script:Alvo)
+        ($r | ForEach-Object { $_.Pfn }) -join '|' | Should -Be 'SpotifyAB.SpotifyMusic_zpdnekdrzrea0'
+        $r[0].Nome | Should -Be 'App Spotify'
+        Should -Invoke Get-AppxPackage -ParameterFilter { $User -eq 'S-1-5-21-1-2-3-1001' }
+    }
+
+    It 'I9 mostra só tarefas fora de \Microsoft\ e não desabilitadas' {
+        Mock Get-ScheduledTask {
+            $acao = @([pscustomobject]@{ Execute = 'C:\Program Files\F\upd.exe' })
+            [pscustomobject]@{ TaskPath = '\Microsoft\Windows\'; TaskName = 'A'; State = 'Ready'; Actions = $acao }
+            [pscustomobject]@{ TaskPath = '\Fabricante\'; TaskName = 'Atualizar'; State = 'Ready'; Actions = $acao }
+            [pscustomobject]@{ TaskPath = '\Outra\'; TaskName = 'B'; State = 'Disabled'; Actions = $acao }
+        }
+        Mock Get-EmpresaExecutavel { 'F SA' }
+        (@(Get-CandidatoI9) | ForEach-Object { $_.Caminho }) -join '|' | Should -Be '\Fabricante\Atualizar'
+    }
+
+    It 'I10 mostra só serviços de terceiros com início automático ou manual' {
+        Mock Get-Service {
+            'Win', 'Drv', 'Boot', 'Terceiro', 'Desativado' | ForEach-Object { [pscustomobject]@{ Name = $_; DisplayName = "Serviço $_" } }
+        }
+        Mock Get-InicioServico {
+            switch ($Nome) {
+                'Win' { [pscustomobject]@{ Start = 2; Atrasado = $false; Tipo = 0x10; ImagePath = '%SystemRoot%\System32\svchost.exe -k netsvcs' } }
+                'Drv' { [pscustomobject]@{ Start = 3; Atrasado = $false; Tipo = 0x1; ImagePath = 'C:\Program Files\D\d.sys' } }
+                'Boot' { [pscustomobject]@{ Start = 1; Atrasado = $false; Tipo = 0x10; ImagePath = 'C:\Program Files\B\b.exe' } }
+                'Terceiro' { [pscustomobject]@{ Start = 2; Atrasado = $false; Tipo = 0x10; ImagePath = '"C:\Program Files\T\t.exe"' } }
+                'Desativado' { [pscustomobject]@{ Start = 4; Atrasado = $false; Tipo = 0x10; ImagePath = 'C:\Program Files\Z\z.exe' } }
+            }
+        }
+        $r = @(Get-CandidatoI10)
+        ($r | ForEach-Object { $_.Nome }) -join '|' | Should -Be 'Terceiro'
+        $r[0].Exibicao | Should -Be 'Serviço Terceiro'
+    }
+
+    It 'I10 esconde serviços da Microsoft fora de %windir% (Defender é intocável)' {
+        Mock Get-Service { 'WinDefend', 'Terceiro' | ForEach-Object { [pscustomobject]@{ Name = $_; DisplayName = $_ } } }
+        Mock Get-InicioServico {
+            $img = if ($Nome -eq 'WinDefend') { '"C:\ProgramData\Microsoft\Windows Defender\platform\4.18\MsMpEng.exe"' } else { 'C:\Program Files\T\t.exe' }
+            [pscustomobject]@{ Start = 2; Atrasado = $false; Tipo = 0x10; ImagePath = $img }
+        }
+        Mock Get-EmpresaExecutavel { if ($Caminho -like '*MsMpEng.exe') { 'Microsoft Corporation' } else { 'T Ltda' } }
+        (@(Get-CandidatoI10) | ForEach-Object { $_.Nome }) -join '|' | Should -Be 'Terceiro'
+    }
+
+    It 'I9 esconde tarefas que executam programa do Windows ou da Microsoft' {
+        Mock Get-ScheduledTask {
+            [pscustomobject]@{ TaskPath = '\'; TaskName = 'CreateExplorerShellUnelevatedTask'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = 'C:\Windows\explorer.exe' }) }
+            [pscustomobject]@{ TaskPath = '\'; TaskName = 'MicrosoftEdgeUpdateTaskMachineCore'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = 'C:\Program Files (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe' }) }
+            [pscustomobject]@{ TaskPath = '\Fabricante\'; TaskName = 'Atualizar'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = 'C:\Program Files\F\upd.exe' }) }
+            [pscustomobject]@{ TaskPath = '\SoftLanding\'; TaskName = 'Com'; State = 'Ready'; Actions = @([pscustomobject]@{ ClassId = '{00000000-0000-0000-0000-000000000000}' }) }
+        }
+        Mock Get-EmpresaExecutavel { if ($Caminho -like '*EdgeUpdate*') { 'Microsoft Corporation' } else { 'F SA' } }
+        (@(Get-CandidatoI9) | ForEach-Object { $_.Caminho }) -join '|' | Should -Be '\Fabricante\Atualizar'
+    }
+
+    It 'A2 esconde ferramentas de driver e programas da Microsoft' {
+        Mock Get-ProgramaMaquina {
+            [pscustomobject]@{ Nome = 'Dell SupportAssist'; Fabricante = 'Dell Inc.'; Versao = '4'; Tipo = 'MSI'; Id = '{11111111-1111-1111-1111-111111111111}' }
+            [pscustomobject]@{ Nome = 'Microsoft Visual C++'; Fabricante = 'Microsoft Corporation'; Versao = '14'; Tipo = 'MSI'; Id = '{22222222-2222-2222-2222-222222222222}' }
+            [pscustomobject]@{ Nome = 'HP Smart'; Fabricante = 'HP Inc.'; Versao = '1'; Tipo = 'Appx'; Id = 'AD2F1837.HPPrinterControl' }
+        }
+        (@(Get-CandidatoA2) | ForEach-Object { $_.Nome }) -join '|' | Should -Be 'HP Smart'
+    }
+}
+
 Describe 'Save-PerfilGerado' {
     BeforeEach {
         $script:Pasta = Join-Path $TestDrive ([guid]::NewGuid())
