@@ -1,0 +1,6 @@
+CLAUDE.md
+tools/
+perfis/*
+!perfis/exemplo.psd1
+.claude/
+.superpowers/
