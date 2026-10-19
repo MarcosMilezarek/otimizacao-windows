@@ -1,0 +1,3 @@
+tools/
+perfis/*
+!perfis/exemplo.psd1
