@@ -238,6 +238,48 @@ Describe 'New-PerfilInterativo' {
     }
 }
 
+Describe 'Menu: escolha e criação de perfil' {
+    BeforeAll { . (Join-Path $PSScriptRoot '..\src\Menu.ps1') }
+    BeforeEach {
+        $script:Gerados = Join-Path $TestDrive ([guid]::NewGuid())
+        $script:Projeto = Join-Path $TestDrive ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:Gerados, $script:Projeto | Out-Null
+        Mock Get-PastaPerfil { $script:Gerados, $script:Projeto }
+        Mock Write-Host { }
+        Mock Set-AcessoRestrito { }
+    }
+
+    It 'Lista perfis gerados e do projeto, sem o exemplo, por nome' {
+        foreach ($a in (Join-Path $script:Projeto 'exemplo.psd1'), (Join-Path $script:Projeto 'B.psd1'), (Join-Path $script:Gerados 'A.psd1')) { Set-Content -LiteralPath $a -Value '@{}' }
+        (@(Get-ArquivoPerfil) | ForEach-Object { $_.Name }) -join ',' | Should -Be 'A.psd1,B.psd1'
+    }
+
+    It 'N cria o perfil e o devolve como escolhido' {
+        $novo = Join-Path $script:Gerados 'Novo.psd1'
+        Set-Content -LiteralPath $novo -Value "@{ Cliente = 'Novo'; Aplicar = @('L1') }"
+        Mock Read-Opcao { 'N' }
+        Mock New-PerfilInterativo { $novo }
+        $r = Select-PerfilMenu
+        $r.Caminho | Should -Be $novo
+        $r.Perfil.Cliente | Should -Be 'Novo'
+        Should -Invoke New-PerfilInterativo -Times 1 -Exactly -ParameterFilter { $Pasta -eq $script:Gerados }
+    }
+
+    It 'Sem perfis mostra o menu e 0 sai sem erro' {
+        Mock Read-Opcao { '0' }
+        Select-PerfilMenu | Should -BeNullOrEmpty
+    }
+
+    It 'Novo perfil cancelado volta à lista' {
+        $script:Respostas = New-Object System.Collections.Queue
+        'N', '0' | ForEach-Object { $script:Respostas.Enqueue($_) }
+        Mock Read-Opcao { $script:Respostas.Dequeue() }
+        Mock New-PerfilInterativo { $null }
+        Select-PerfilMenu | Should -BeNullOrEmpty
+        Should -Invoke New-PerfilInterativo -Times 1 -Exactly
+    }
+}
+
 Describe 'Save-PerfilGerado' {
     BeforeEach {
         $script:Pasta = Join-Path $TestDrive ([guid]::NewGuid())
