@@ -609,18 +609,38 @@ function Stop-FluxoMenu {
     Write-Host 'Fluxo cancelado. Se uma etapa estiver em execução, ela termina e nada mais é executado. O que já foi aplicado continua; para desfazer, use Reverter.' -ForegroundColor Yellow
 }
 
+function Get-PastaPerfil {
+    <# Pastas de perfis: os gerados pelo Novo perfil (na máquina, nunca no repositório) e perfis\ do projeto. #>
+    Join-Path $script:RaizFluxo 'perfis'
+    Join-Path (Split-Path -Parent $PSScriptRoot) 'perfis'
+}
+
+function Get-ArquivoPerfil {
+    <# Perfis .psd1 das pastas de perfis, sem o exemplo do projeto, por nome. #>
+    @(foreach ($p in Get-PastaPerfil) { Get-ChildItem -LiteralPath $p -Filter '*.psd1' -File -ErrorAction SilentlyContinue }) |
+        Where-Object { $_.Name -ne 'exemplo.psd1' } | Sort-Object -Property Name
+}
+
 function Select-PerfilMenu {
-    <# Lista perfis\*.psd1 e devolve o escolhido (Caminho e Perfil), ou $null para sair. #>
-    $pasta = Join-Path (Split-Path -Parent $PSScriptRoot) 'perfis'
-    $arquivos = @(Get-ChildItem -LiteralPath $pasta -Filter '*.psd1' -File -ErrorAction SilentlyContinue | Sort-Object -Property Name)
-    if (-not $arquivos.Count) { Write-Host "Nenhum perfil em $pasta." -ForegroundColor Red; return $null }
+    <# Lista os perfis e a opção Novo perfil; devolve o escolhido ou o criado (Caminho e Perfil), ou $null para sair. #>
     while ($true) {
+        $arquivos = @(Get-ArquivoPerfil)
         Write-Host ''
         Write-Host 'Perfis de cliente:' -ForegroundColor Cyan
         for ($i = 0; $i -lt $arquivos.Count; $i++) { Write-Host ('  {0}. {1}' -f ($i + 1), $arquivos[$i].Name) }
+        Write-Host '  N. Novo perfil'
         Write-Host '  0. Sair'
         $op = Read-Opcao 'Perfil'
         if ($op -eq '0') { return $null }
+        if ($op -match '^[nN]$') {
+            $pasta = @(Get-PastaPerfil)[0]
+            if (-not (Test-Path -LiteralPath $pasta)) { New-Item -ItemType Directory -Path $pasta -Force | Out-Null; Set-AcessoRestrito -Pasta $pasta }
+            # Carregado só aqui: o fluxo no boot não precisa das funções de leitura do Novo perfil.
+            . (Join-Path $PSScriptRoot 'Perfil.ps1')
+            $novo = New-PerfilInterativo -Pasta $pasta
+            if ($novo) { return [pscustomobject]@{ Caminho = $novo; Perfil = Import-PerfilCliente -Caminho $novo } }
+            continue
+        }
         $n = 0
         if ([int]::TryParse($op, [ref]$n) -and $n -ge 1 -and $n -le $arquivos.Count) {
             try { return [pscustomobject]@{ Caminho = $arquivos[$n - 1].FullName; Perfil = Import-PerfilCliente -Caminho $arquivos[$n - 1].FullName } }
