@@ -227,10 +227,181 @@ function Get-CandidatoI10 {
     }
 }
 
+function Get-UsuarioLocal {
+    <# Perfis de usuário locais não especiais: Sid, Nome (DOMINIO\usuario, ou o SID se não resolver) e Perfil. #>
+    Get-CimInstance -ClassName Win32_UserProfile -Filter 'Special = False' | ForEach-Object {
+        $nome = try { ([Security.Principal.SecurityIdentifier]$_.SID).Translate([Security.Principal.NTAccount]).Value } catch { $_.SID }
+        [pscustomobject]@{ Sid = $_.SID; Nome = $nome; Perfil = $_.LocalPath }
+    } | Sort-Object -Property Nome
+}
+
 function Get-CandidatoA2 {
     <# Programas da máquina que o A2 aceita remover (sem Microsoft, sem ferramentas de driver e BIOS, sem os nunca removidos). #>
     Get-ProgramaMaquina | Where-Object { -not (Get-MotivoProibido -Programa $_ -A2) } | Sort-Object -Property Nome |
         ForEach-Object { [pscustomobject]@{ Nome = $_.Nome; Fabricante = $_.Fabricante; Versao = $_.Versao; Tipo = $_.Tipo; Id = $_.Id } }
+}
+
+#endregion
+
+#region Novo perfil (interativo)
+
+function Read-EntradaPerfil {
+    <# Único ponto de leitura do teclado (substituído nos testes). #>
+    param([Parameter(Mandatory)][string]$Pergunta)
+    Read-Host -Prompt $Pergunta
+}
+
+function Read-RespostaPerfil {
+    <# Resposta sem espaços nas pontas; '0' cancela o Novo perfil (exceto onde 0 é valor válido, como as horas do M8). #>
+    param([Parameter(Mandatory)][string]$Pergunta, [switch]$ZeroValido)
+    $r = ([string](Read-EntradaPerfil -Pergunta $Pergunta)).Trim()
+    if ($r -eq '0' -and -not $ZeroValido) { throw [OperationCanceledException]'Novo perfil cancelado.' }
+    $r
+}
+
+function Read-SimNao {
+    param([Parameter(Mandatory)][string]$Pergunta)
+    while ($true) {
+        $r = Read-RespostaPerfil "$Pergunta (S/N)"
+        if ($r -match '^[sS]$') { return $true }
+        if ($r -match '^[nN]$') { return $false }
+    }
+}
+
+function Read-Selecao {
+    <# Pergunta até a resposta ser uma seleção válida (ConvertFrom-Selecao); Enter vazio = nenhum. #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interativo: mensagem só para a tela.')]
+    param([Parameter(Mandatory)][string]$Pergunta, [Parameter(Mandatory)][string[]]$Validos)
+    while ($true) {
+        $r = Read-RespostaPerfil $Pergunta
+        try { return @(ConvertFrom-Selecao -Texto $r -Validos $Validos) }
+        catch [ArgumentException] { Write-Host $_.Exception.Message -ForegroundColor Red }
+    }
+}
+
+function Read-HoraM8 {
+    <# Início e fim do horário ativo: horas 0 a 23 e intervalo de 1 a 18 h, mesma regra do Manutencao. #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interativo: mensagem só para a tela.')]
+    param()
+    while ($true) {
+        $ini = Read-RespostaPerfil 'M8: hora de início do horário ativo (0 a 23)' -ZeroValido
+        $fim = Read-RespostaPerfil 'M8: hora de fim do horário ativo (0 a 23)' -ZeroValido
+        if ($ini -match '^\d{1,2}$' -and $fim -match '^\d{1,2}$' -and [int]$ini -le 23 -and [int]$fim -le 23) {
+            $duracao = ([int]$fim - [int]$ini + 24) % 24
+            if ($duracao -ge 1 -and $duracao -le 18) { return @{ M8Inicio = [int]$ini; M8Fim = [int]$fim } }
+        }
+        Write-Host 'Horas de 0 a 23, com intervalo de 1 a 18 h (limite do Windows).' -ForegroundColor Red
+    }
+}
+
+function Get-ListaItem {
+    <# Lista lida da máquina para um item de lista: Valor (gravado no perfil) e Rotulo (mostrado). #>
+    param([Parameter(Mandatory)][string]$Id, $Alvo)
+    switch ($Id) {
+        'I1' { Get-CandidatoI1 -Alvo $Alvo | ForEach-Object { [pscustomobject]@{ Valor = $_.Nome; Rotulo = "$($_.Nome)  [$($_.Origem)]  $($_.Comando)" } } }
+        'I4' { Get-CandidatoI4 -Alvo $Alvo | ForEach-Object { [pscustomobject]@{ Valor = $_.Pfn; Rotulo = "$($_.Nome)  [$($_.Pfn)]" } } }
+        'I9' { Get-CandidatoI9 | ForEach-Object { [pscustomobject]@{ Valor = $_.Caminho; Rotulo = "$($_.Caminho)  [$($_.Estado)]" } } }
+        'I10' { Get-CandidatoI10 | ForEach-Object { [pscustomobject]@{ Valor = $_.Nome; Rotulo = "$($_.Exibicao) ($($_.Nome))  [$($_.Inicio)]" } } }
+        'A2' { Get-CandidatoA2 | ForEach-Object { [pscustomobject]@{ Valor = $_.Id; Rotulo = "$($_.Nome) $($_.Versao)  [$($_.Fabricante), $($_.Tipo)]" } } }
+    }
+}
+
+function New-PerfilInterativo {
+    <#
+        Monta o perfil por perguntas: cliente, usuário alvo, itens por script (nada marcado), listas lidas da máquina
+        e opções só dos itens marcados, resumo e confirmação. Devolve o caminho gravado, ou $null se cancelado.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interativo: texto colorido só para a tela.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Grava só depois da confirmação S/N do resumo.')]
+    param([Parameter(Mandatory)][string]$Pasta)
+    try {
+        Write-Host ''
+        Write-Host 'Novo perfil (0 cancela em qualquer pergunta, exceto nas horas)' -ForegroundColor Cyan
+        $sobrescrever = $false
+        while ($true) {
+            $cliente = Read-RespostaPerfil 'Nome do cliente (letras, números, ponto, hífen, sublinhado)'
+            if ($cliente -notmatch '^[\w.-]{1,60}$') { Write-Host 'Nome inválido.' -ForegroundColor Red; continue }
+            if (-not (Test-Path -LiteralPath (Join-Path $Pasta "$cliente.psd1"))) { break }
+            if (Read-SimNao "Já existe perfil para $cliente. Sobrescrever?") { $sobrescrever = $true; break }
+        }
+
+        $usuarios = @(Get-UsuarioLocal)
+        Write-Host ''
+        Write-Host 'Usuário alvo (HKCU alterado pelos scripts):' -ForegroundColor Cyan
+        Write-Host '  1. Usuário conectado no momento do fluxo'
+        for ($i = 0; $i -lt $usuarios.Count; $i++) { Write-Host ('  {0}. {1}' -f ($i + 2), $usuarios[$i].Nome) }
+        while ($true) {
+            $r = Read-RespostaPerfil 'Usuário'
+            $n = 0
+            if ([int]::TryParse($r, [ref]$n) -and $n -ge 1 -and $n -le $usuarios.Count + 1) { break }
+        }
+        $sid = if ($n -eq 1) { '' } else { $usuarios[$n - 2].Sid }
+
+        $catalogo = @(Get-CatalogoPerfil)
+        $marcados = New-Object System.Collections.Generic.List[string]
+        foreach ($grupo in @($catalogo | Group-Object -Property Script | Sort-Object -Property { [array]::IndexOf(@($catalogo.Script), $_.Name) })) {
+            Write-Host ''
+            Write-Host $grupo.Name -ForegroundColor Cyan
+            $itens = @($grupo.Group)
+            for ($i = 0; $i -lt $itens.Count; $i++) {
+                $it = $itens[$i]
+                Write-Host ('  {0,2}. {1,-4} {2}' -f ($i + 1), $it.Id, $it.Texto)
+                Write-Host ('            Perde: {0}{1}' -f $it.Perda, $(if ($it.Aviso) { "  ATENÇÃO: $($it.Aviso)" })) -ForegroundColor DarkGray
+            }
+            foreach ($id in Read-Selecao -Pergunta "Itens de $($grupo.Name) (números ou IDs; Enter = nenhum)" -Validos @($itens.Id)) {
+                if (-not ($itens | Where-Object Id -EQ $id).Informativo) { $marcados.Add($id) }
+            }
+        }
+        if (-not $marcados.Count) { Write-Host 'Nenhum item marcado. Nada foi gravado.' -ForegroundColor Yellow; return $null }
+
+        $opcoes = @{}
+        $alvo = $null
+        foreach ($it in @($catalogo | Where-Object { $_.Opcao -and $marcados.Contains($_.Id) })) {
+            try {
+                if ($it.Id -in 'I1', 'I4' -and -not $alvo) { $alvo = if ($sid) { Get-UsuarioAlvo -Sid $sid } else { Get-UsuarioAlvo } }
+                $lista = @(Get-ListaItem -Id $it.Id -Alvo $alvo)
+            }
+            catch { Write-Host "$($it.Id): não foi possível ler a lista ($($_.Exception.Message)). Item desmarcado." -ForegroundColor Yellow; [void]$marcados.Remove($it.Id); continue }
+            if (-not $lista.Count) { Write-Host "$($it.Id): nada encontrado nesta máquina. Item desmarcado." -ForegroundColor Yellow; [void]$marcados.Remove($it.Id); continue }
+            Write-Host ''
+            Write-Host "$($it.Id): $($it.Texto)" -ForegroundColor Cyan
+            for ($i = 0; $i -lt $lista.Count; $i++) { Write-Host ('  {0,2}. {1}' -f ($i + 1), $lista[$i].Rotulo) }
+            $escolha = @(Read-Selecao -Pergunta "Escolha para $($it.Id) (números; Enter = nenhum)" -Validos @($lista.Valor))
+            if (-not $escolha.Count) { Write-Host "$($it.Id): nada escolhido. Item desmarcado." -ForegroundColor Yellow; [void]$marcados.Remove($it.Id); continue }
+            if ($it.Id -eq 'I10') {
+                $mapa = @{}
+                foreach ($s in $escolha) {
+                    while ($true) {
+                        $t = Read-RespostaPerfil "I10: $s fica (M) Manual ou (D) Desativado?"
+                        if ($t -match '^[mM]$') { $mapa[$s] = 'Manual'; break }
+                        if ($t -match '^[dD]$') { $mapa[$s] = 'Disabled'; break }
+                    }
+                }
+                $opcoes[$it.Opcao] = $mapa
+            }
+            else { $opcoes[$it.Opcao] = $escolha }
+        }
+        if (-not $marcados.Count) { Write-Host 'Nenhum item restou marcado. Nada foi gravado.' -ForegroundColor Yellow; return $null }
+
+        if ($marcados.Contains('M1')) { $opcoes['M1Reparar'] = Read-SimNao 'M1: reparar a imagem se a verificação achar problema (baixa pelo Windows Update)?' }
+        if ($marcados.Contains('M2')) { $opcoes['M2Reparar'] = Read-SimNao 'M2: rodar sfc /scannow se a verificação achar problema?' }
+        if ($marcados.Contains('M8')) { $h = Read-HoraM8; $opcoes['M8Inicio'] = $h.M8Inicio; $opcoes['M8Fim'] = $h.M8Fim }
+        if ($marcados.Contains('V5')) { $opcoes['V5DesligarInicializacaoRapida'] = Read-SimNao 'V5: desligar a inicialização rápida?' }
+
+        $aplicar = @($catalogo | Where-Object { $marcados.Contains($_.Id) } | ForEach-Object { $_.Id })
+        Write-Host ''
+        Write-Host "Resumo: cliente $cliente, usuário $(if ($sid) { ($usuarios | Where-Object Sid -EQ $sid).Nome } else { 'conectado no momento do fluxo' })" -ForegroundColor Cyan
+        foreach ($it in @($catalogo | Where-Object { $marcados.Contains($_.Id) })) {
+            $extra = if ($it.Opcao) { $v = $opcoes[$it.Opcao]; if ($v -is [hashtable]) { ($v.Keys | ForEach-Object { "$_=$($v[$_])" }) -join ', ' } else { @($v) -join ', ' } }
+            Write-Host ('  {0,-4} {1}{2}' -f $it.Id, $it.Texto, $(if ($extra) { "  -> $extra" }))
+        }
+        foreach ($k in @('M1Reparar', 'M2Reparar', 'M8Inicio', 'M8Fim', 'V5DesligarInicializacaoRapida') | Where-Object { $opcoes.ContainsKey($_) }) { Write-Host "  $k = $($opcoes[$k])" }
+        if (-not (Read-SimNao 'Gravar este perfil?')) { Write-Host 'Nada foi gravado.'; return $null }
+        $arquivo = Save-PerfilGerado -Dados @{ Cliente = $cliente; UsuarioSid = $sid; Aplicar = $aplicar; Opcoes = $opcoes } -Pasta $Pasta -Force:$sobrescrever
+        Write-Host "Perfil gravado: $arquivo" -ForegroundColor Green
+        $arquivo
+    }
+    catch [OperationCanceledException] { Write-Host 'Novo perfil cancelado. Nada foi gravado.' -ForegroundColor Yellow; $null }
 }
 
 #endregion

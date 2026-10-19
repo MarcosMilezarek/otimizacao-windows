@@ -150,6 +150,94 @@ Describe 'Listas da máquina' {
     }
 }
 
+Describe 'New-PerfilInterativo' {
+    BeforeEach {
+        $script:Pasta = Join-Path $TestDrive ([guid]::NewGuid())
+        Mock Write-Host { }
+        Mock Get-UsuarioLocal { [pscustomobject]@{ Sid = 'S-1-5-21-1-2-3-1001'; Nome = 'PC\cliente'; Perfil = 'C:\Users\cliente' } }
+        Mock Get-UsuarioAlvo { [pscustomobject]@{ Sid = 'S-1-5-21-1-2-3-1001'; Perfil = 'C:\Users\cliente' } }
+        Mock Get-CandidatoI1 { [pscustomobject]@{ Nome = 'X Agent'; Origem = 'Maquina\Run'; Comando = 'x.exe' }, [pscustomobject]@{ Nome = 'Y'; Origem = 'Usuario\Run'; Comando = 'y.exe' } }
+        Mock Get-CandidatoI10 { }
+        function Set-Respostas([string[]]$Lista) {
+            $script:Fila = New-Object System.Collections.Queue
+            foreach ($r in $Lista) { $script:Fila.Enqueue($r) }
+        }
+        Mock Read-EntradaPerfil { if (-not $script:Fila.Count) { throw 'Fila de respostas vazia.' }; $script:Fila.Dequeue() }
+    }
+
+    # Ordem das perguntas: cliente, usuário, Manutencao, Aplicativos, Inicializacao, VisualEnergia, Limpeza, listas, opções, confirmação.
+    It 'Fluxo completo grava o perfil com os itens, a lista e o horário escolhidos' {
+        Set-Respostas 'ClienteA', '1', 'M8', '', 'I1', '', '', '1', '7', '19', 'S'
+        $arq = New-PerfilInterativo -Pasta $script:Pasta
+        $arq | Should -Be (Join-Path $script:Pasta 'ClienteA.psd1')
+        $p = Import-PerfilCliente -Caminho $arq
+        $p.Aplicar -join ',' | Should -Be 'M8,I1'
+        $p.UsuarioSid | Should -Be ''
+        @($p.Opcoes.I1Desabilitar) -join '|' | Should -Be 'X Agent'
+        $p.Opcoes.M8Inicio | Should -Be 7
+        $p.Opcoes.M8Fim | Should -Be 19
+        $script:Fila.Count | Should -Be 0
+    }
+
+    It 'Usuário escolhido na lista vai para UsuarioSid' {
+        Set-Respostas 'ClienteB', '2', 'M3', '', '', '', '', 'S'
+        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).UsuarioSid | Should -Be 'S-1-5-21-1-2-3-1001'
+    }
+
+    It 'A3 marcado não entra em Aplicar' {
+        Set-Respostas 'ClienteC', '1', '', 'A3 A4', '', '', '', 'S'
+        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'A4'
+    }
+
+    It 'Item de lista sem nada na máquina é desmarcado' {
+        Set-Respostas 'ClienteD', '1', '', '', 'I10 I2', '', '', 'S'
+        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'I2'
+    }
+
+    It 'Serviço do I10 recebe Manual ou Disabled' {
+        Mock Get-CandidatoI10 { [pscustomobject]@{ Nome = 'Svc X'; Exibicao = 'Serviço X'; Inicio = 'Automático' } }
+        Set-Respostas 'ClienteE', '1', '', '', 'I10', '', '', '1', 'D', 'S'
+        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Opcoes.I10Servicos['Svc X'] | Should -Be 'Disabled'
+    }
+
+    It 'Resposta 0 cancela sem gravar' {
+        Set-Respostas 'ClienteF', '1', 'M3', '0'
+        New-PerfilInterativo -Pasta $script:Pasta | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path $script:Pasta 'ClienteF.psd1') | Should -BeFalse
+    }
+
+    It 'Seleção inválida pergunta de novo' {
+        Set-Respostas 'ClienteG', '1', 'Z9', 'M3', '', '', '', '', 'S'
+        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'M3'
+    }
+
+    It 'Horário do M8 com intervalo inválido pergunta de novo' {
+        Set-Respostas 'ClienteH', '1', 'M8', '', '', '', '', '7', '7', '8', '20', 'S'
+        $p = Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)
+        $p.Opcoes.M8Inicio | Should -Be 8
+        $p.Opcoes.M8Fim | Should -Be 20
+    }
+
+    It 'Confirmação N não grava' {
+        Set-Respostas 'ClienteI', '1', 'M3', '', '', '', '', 'N'
+        New-PerfilInterativo -Pasta $script:Pasta | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path $script:Pasta 'ClienteI.psd1') | Should -BeFalse
+    }
+
+    It 'Nenhum item marcado não grava' {
+        Set-Respostas 'ClienteJ', '1', '', '', '', '', ''
+        New-PerfilInterativo -Pasta $script:Pasta | Should -BeNullOrEmpty
+        $script:Fila.Count | Should -Be 0
+    }
+
+    It 'Nome inválido e perfil existente perguntam de novo; sobrescrever exige S' {
+        New-Item -ItemType Directory -Path $script:Pasta | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:Pasta 'Existe.psd1') -Value "@{ Cliente = 'Existe' }"
+        Set-Respostas 'a b', 'Existe', 'N', 'Existe', 'S', '1', 'M3', '', '', '', '', 'S'
+        (Import-PerfilCliente -Caminho (New-PerfilInterativo -Pasta $script:Pasta)).Aplicar -join ',' | Should -Be 'M3'
+    }
+}
+
 Describe 'Save-PerfilGerado' {
     BeforeEach {
         $script:Pasta = Join-Path $TestDrive ([guid]::NewGuid())
